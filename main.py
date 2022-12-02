@@ -28,7 +28,7 @@ import random
 class ModelYolov7:
     source = 0
     device = ''
-    weights = 'best-1.pt'
+    weights = 'yolov7.pt'
     image_size = 640
     conf_thres = 0.75
     iou_thres = 0.45
@@ -65,6 +65,10 @@ class ModelYolov7:
         self.colors = [[random.randint(0, 255)
                         for _ in range(3)] for _ in self.names]
 
+        self.sort_tracker = Sort(max_age=5,
+                            min_hits=2,
+                            iou_threshold=0.2)
+
     def time_synchronized(self):
         # pytorch-accurate time
         if torch.cuda.is_available():
@@ -89,6 +93,7 @@ class MainWindow(QMainWindow):
     colors = yolo_v7.colors
     track = yolo_v7.track
 
+    sort_tracker = yolo_v7.sort_tracker
     def __init__(self):
         # self.main_win = QMainWindow()
         super().__init__()
@@ -147,7 +152,7 @@ class MainWindow(QMainWindow):
             else:
                 # self.out = cv2.VideoWriter('prediction.avi', cv2.VideoWriter_fourcc(
                 #     *'MJPG'), 20, (int(self.cap.get(3)), int(self.cap.get(4))))
-                self.timer_video.start(30)
+                self.timer_video.start(50)
                 self.uic.btnStart.setDisabled(True)
 
     # def show_webcam(self, frame):
@@ -186,24 +191,84 @@ class MainWindow(QMainWindow):
                 # Apply NMS
                 pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, classes=self.classes,
                                            agnostic=self.agnostic_nms)
-                print('pred : ', pred)
+                # print('pred : ', pred)
                 # Process detections
                 for i, det in enumerate(pred):  # detections per image
                     if det is not None and len(det):
                         # Rescale boxes from img_size to im0 size
                         det[:, :4] = scale_coords(img.shape[2:], det[:, :4], showimg.shape).round()
+
+                        # QUI adding - cls
+                        print(det)
+                        print(reversed(det))
                         # Write results
                         for *xyxy, conf, cls in reversed(det):
                             label = '%s %.2f' % (self.names[int(cls)], conf)
                             name_list.append(self.names[int(cls)])
                             print(label)
+                            # clss.append(cls)
                             plot_one_box(xyxy, showimg, label=label, color=self.colors[int(cls)], line_thickness=2)
-                            c1, c2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
-                            print('c1: ', c1, 'c2: ', c2)
-                            center = (int((c1[0]+c2[0])/2), int((c1[1]+c2[1])/2))
-                            cv2.circle(showimg, center, radius=0, color=(0,0,255), thickness=3)
+                            # c1, c2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
+                            # # print('c1: ', c1, 'c2: ', c2)
+                            # center = (int((c1[0]+c2[0])/2), int((c1[1]+c2[1])/2))
+                            # cv2.circle(showimg, center, radius=0, color=(0,0,255), thickness=3)
 
-            # self.out.write(showimg)
+                        # Tracking ----***************
+                        dets_to_sort = np.empty((0, 6))
+                        # NOTE: We send in detected object class too
+                        for x1, y1, x2, y2, conf, detclass in det.cpu().detach().numpy():
+                            dets_to_sort = np.vstack((dets_to_sort,
+                                                      np.array([x1, y1, x2, y2, conf, detclass])))
+
+                        if self.track:
+                            tracked_dets = self.sort_tracker.update(dets_to_sort, unique_color=False)
+                            tracks = self.sort_tracker.getTrackers()
+
+                            # draw boxes for visualization
+                            if len(tracked_dets) > 0:
+                                bbox_xyxy = tracked_dets[:, :4]
+                                identities = tracked_dets[:, 8]
+                                categories = tracked_dets[:, 4]
+                                confidences = None
+
+                                print('bbox_xyxy=', bbox_xyxy)
+                                print('identities=', identities)
+                                print('categories=', categories)
+                                print('confidences=', confidences)
+
+
+
+                                for i, box in enumerate(bbox_xyxy):
+                                    x1, y1, x2, y2 = [int(i) for i in box]
+                                    cat = int(categories[i]) if categories is not None else 0
+                                    id = int(identities[i]) if identities is not None else 0
+
+                                    center = (int((x1+x2)/2), int((y1+y2)/2))
+                                    cv2.circle(showimg, center, radius=0, color=(0, 0, 255), thickness=3)   #draw center point
+                                    tl = 2 or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
+                                    tf = max(tl, 1)  # font thickness
+                                    cv2.putText(showimg, 'ID:'+str(id), center, 0, tl/3, self.colors[cat], thickness=tf, lineType=cv2.LINE_AA)
+
+                                # if opt.show_track:
+                                #     # loop over tracks
+                                #     for t, track in enumerate(tracks):
+                                #         track_color = colors[int(track.detclass)] if not opt.unique_track_color else \
+                                #         sort_tracker.color_list[t]
+                                #
+                                #         [cv2.line(im0, (int(track.centroidarr[i][0]),
+                                #                         int(track.centroidarr[i][1])),
+                                #                   (int(track.centroidarr[i + 1][0]),
+                                #                    int(track.centroidarr[i + 1][1])),
+                                #                   track_color, thickness=opt.thickness)
+                                #          for i, _ in enumerate(track.centroidarr)
+                                #          if i < len(track.centroidarr) - 1]
+                        else:
+                            bbox_xyxy = dets_to_sort[:, :4]
+                            identities = None
+                            categories = dets_to_sort[:, 5]
+                            confidences = dets_to_sort[:, 4]
+
+
             # show = showimg
             show = cv2.resize(showimg, (640, 480))
 
@@ -322,6 +387,9 @@ class MainWindow(QMainWindow):
     def btnStop_conveyor_clicked(self):
         STOP = [0x02, 0x53, 0x54, 0x4F, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x03]
         n = self.ser[1].sendSerial(bytes(STOP))
+
+    def test_lsv(self):
+        self.uic.lsv_stack_object.item
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

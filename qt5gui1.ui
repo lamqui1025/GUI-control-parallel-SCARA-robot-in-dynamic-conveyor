@@ -35,7 +35,7 @@
      <rect>
       <x>10</x>
       <y>10</y>
-      <width>181</width>
+      <width>161</width>
       <height>241</height>
      </rect>
     </property>
@@ -91,7 +91,7 @@
       <string>Disconnected</string>
      </property>
     </widget>
-    <widget class="QWidget" name="">
+    <widget class="QWidget" name="layoutWidget">
      <property name="geometry">
       <rect>
        <x>12</x>
@@ -615,6 +615,16 @@
       <string>0</string>
      </property>
     </widget>
+   </widget>
+   <widget class="QListView" name="lsv_stack_object">
+    <property name="geometry">
+     <rect>
+      <x>900</x>
+      <y>10</y>
+      <width>201</width>
+      <height>411</height>
+     </rect>
+    </property>
    </widget>
   </widget>
   <widget class="QMenuBar" name="menubar">
