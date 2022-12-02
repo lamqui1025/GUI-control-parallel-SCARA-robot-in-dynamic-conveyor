@@ -1,17 +1,19 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets, QtSerialPort
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QPixmap
 from qtGUI1 import Ui_MainWindow
 
-from time import time
+import time
+# from time import time
 from utils.torch_utils import select_device, load_classifier, time_synchronized, TracedModel
 from models.experimental import attempt_load
 from utils.general import check_img_size, non_max_suppression, scale_coords, set_logging
 from utils.datasets import letterbox, LoadStreams, LoadImages
 from utils.plots import plot_one_box
 
+from sort import *
 from threadSerial import serialThread
 
 import torch
@@ -40,6 +42,7 @@ class ModelYolov7:
     update = False
     no_trace = True
     trace = not no_trace
+    track = True
 
     def __init__(self):
         imgsz = self.image_size
@@ -62,6 +65,11 @@ class ModelYolov7:
         self.colors = [[random.randint(0, 255)
                         for _ in range(3)] for _ in self.names]
 
+    def time_synchronized(self):
+        # pytorch-accurate time
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        return time.time()
 
 class MainWindow(QMainWindow):
     dictParity = {0: 'N', 1: 'E', 2: 'O', 3: 'M'}
@@ -79,6 +87,7 @@ class MainWindow(QMainWindow):
 
     names = yolo_v7.names
     colors = yolo_v7.colors
+    track = yolo_v7.track
 
     def __init__(self):
         # self.main_win = QMainWindow()
@@ -92,24 +101,30 @@ class MainWindow(QMainWindow):
 
         # khai bao nut an chay
         self.uic.btnConnect.clicked.connect(self.btnConnect_clicked)
+        self.uic.btnConnect_conveyor.clicked.connect(self.btnConnect_conveyor_clicked)
         self.uic.btnStart.clicked.connect(self.start_capture_video)
         self.uic.btnStop.clicked.connect(self.stop_capture_video)
+        self.uic.btnRun_conveyor.clicked.connect(self.btnRun_conveyor_clicked)
+        self.uic.btnStop_conveyor.clicked.connect(self.btnStop_conveyor_clicked)
+
         self.timer_video.timeout.connect(self.show_video_frame)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.Timer_tick)
         self.timer.start(200)
 
-        # self.serial1 = serial.Serial()
-        # ports = serial.tools.list_ports.comports()
-        # for port, desc, hwid in sorted(ports):
-        #     self.uic.cbPort.addItem(port)
-
-        self.serial1 = serialThread()
+        self.ser = {}
+        self.ser[0] = serialThread()
+        self.ser[1] = serialThread()
         ports = serial.tools.list_ports.comports()
         for port, desc, hwid in sorted(ports):
             self.uic.cbPort.addItem(port)
-        # self.thread = {}
+            self.uic.cbPort_conveyor.addItem(port)
+        self.ser[0].message.connect(self.Received_robot)
+        self.ser[1].message.connect(self.Received_conveyor)
+
+        # portss = QtSerialPort.QSerialPortInfo().availablePorts()
+        # print(portss)
 
     def closeEvent(self, event):
         self.stop_capture_video()
@@ -207,7 +222,7 @@ class MainWindow(QMainWindow):
     # ----------------------------------
 
     def btnConnect_clicked(self):
-        if self.serial1.serialPort.is_open():
+        if self.ser[0].is_Open():
             self.ClosePort()
         else:
             self.OpenPort()
@@ -215,23 +230,47 @@ class MainWindow(QMainWindow):
     def OpenPort(self):
         portname = self.uic.cbPort.currentText()
         baud = int(self.uic.cbBaud.currentText())
-        parity = self.dictParity[self.uic.cbParity.currentIndex()]
+        # parity = self.dictParity[self.uic.cbParity.currentIndex()]
+        parity = self.uic.cbParity.currentIndex()
+        self.ser[0].Conf(portName=portname, baudrate=baud, parity=parity)
 
-        print("name:", self.serial1.serialPort.name, "---baud:", self.serial1.serialPort.baudrate, "---Parity:", self.serial1.serialPort.parity)
-        self.serial1.serialPort.setPort(portname)
-        self.serial1.serialPort.baudrate = baud
-        self.serial1.serialPort.parity = parity
-        print("name:", self.serial1.serialPort.name, "---baud:", self.serial1.serialPort.baudrate, "---Parity:", serial.PARITY_NAMES[parity])
+        print("name:", self.ser[0].serialPort.portName(), "---baud:", self.ser[0].serialPort.baudRate(), "---Parity:", self.ser[0].serialPort.parity())
 
-        self.serial1.serialPort.serialPort.open()
-        self.serial1.serialPort.write('ABCD'.encode('utf-8'))
-        # self.serial1.close()
+        self.ser[0].start()
+        self.ser[0].Open()
+        self.ser[0].sendSerial('ABCD'.encode('utf-8'))
 
     def ClosePort(self):
-        self.serial1.serialPort.close()
+        self.ser[0].Close()
+        self.ser[0].terminate()
+        # self.ser[0].deleteLater()
+
+    def btnConnect_conveyor_clicked(self):
+        if self.ser[1].is_Open():
+            self.ClosePort_conveyor()
+        else:
+            self.OpenPort_conveyor()
+    def OpenPort_conveyor(self):
+        portname = self.uic.cbPort_conveyor.currentText()
+        baud = 9600
+        parity = 0  #NONE
+        # parity = self.uic.cbParity.currentIndex()
+        self.ser[1].Conf(portName=portname, baudrate=baud, parity=parity)
+
+        print("name:", self.ser[1].serialPort.portName(), "---baud:", self.ser[0].serialPort.baudRate(), "---Parity:",
+              self.ser[1].serialPort.parity())
+
+        self.ser[1].start()
+        self.ser[1].Open()
+
+        pid = [0x02, 0x53, 0x50, 0x49, 0x44, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x05, 0x00, 0x16, 0x03]
+        self.ser[1].sendSerial(bytes(pid))
+    def ClosePort_conveyor(self):
+        self.ser[1].Close()
+        self.ser[1].terminate()
 
     def Timer_tick(self):
-        if self.serial1.serialPort.is_open:
+        if self.ser[0].is_Open():
             self.uic.btnConnect.setText('Close')
             self.uic.lbStatus.setText('Connected')
             self.uic.lbStatus.setStyleSheet("QLabel {color : green; }")
@@ -246,90 +285,43 @@ class MainWindow(QMainWindow):
             self.uic.cbBaud.setEnabled(True)
             self.uic.cbParity.setEnabled(True)
 
-class ThreadSerial(QThread):
-    signal = pyqtSignal(int)
+        if self.ser[1].is_Open():
+            self.uic.btnConnect_conveyor.setText('Close')
+            self.uic.cbPort_conveyor.setDisabled(True)
+        else:
+            self.uic.btnConnect_conveyor.setText('Open')
+            self.uic.cbPort_conveyor.setEnabled(True)
 
-    def __init__(self, index=0):
-        super().__init__()
-        self.index = index
+    def Received_robot(self, buff):
+        print('rec robot=', buff)
 
-    def run(self):
-        print('Starting Thread...', self.index)
+    def Received_conveyor(self, buff):
+        print('buff=', buff)
+        print(len(buff))
+        if len(buff) == 18:
+            if buff[0]==2 and buff[17]==3:
+                data = buff[8:16]
+                print('data=', data)
+                direct = data[5]
+                pulse = data[6]*256 + data[7]
+                print('pulse=', pulse)
+                vel = int(pulse * 36000 / 4 / 11 / 56)   # độ trên giây
+                self.uic.lb_realVel.setText(str(vel))
 
+    def btnRun_conveyor_clicked(self):
+        direct = 0x52   #R (REVERSE)
+        direct = 0x46   #F (FORWARD)
 
-# class capture_video(QThread):
-#     signal = pyqtSignal(np.ndarray)
+        speed = self.uic.spinBox_Vel.value()
+        sp0 = speed %256
+        sp1 = speed //256
 
-    # def __init__(self, index):
-    #     self.index = index
-    #     print("start threading", self.index)
-    #     super(capture_video, self).__init__()
+        runSpeed = [0x02, 0x53, 0x52, 0x55, 0x4E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, direct, sp1, sp0, 0x16, 0x03]
+        self.ser[1].sendSerial(bytes(runSpeed))
 
-    # def run(self):
-    #
-    #     self.model = self.load_model()
-    #     self.classes = self.model.names
-    #     self.out_file = "Labeled_Video.avi"
-    #     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    #     self.run_program()
-
-        # cap = cv2.VideoCapture(0)  # 'D:/8.Record video/My Video.mp4'
-        # while True:
-        #     ret, cv_img = cap.read()
-        #     if ret:
-        #         self.signal.emit(cv_img)
-
-    # def get_video_from_url(self):
-    #     return cv2.VideoCapture(0)
-    #
-    # def load_model(self):
-    #     model = torch.hub.load('WongKinYiu/yolov7', 'yolov7', pretrained=True)
-    #     return model
-    #
-    # def score_frame(self, frame):
-    #     self.model.to(self.device)
-    #     frame = [frame]
-    #     results = self.model(frame)
-    #     labels, cord = results.xyxyn[0][:, -1].numpy(), results.xyxyn[0][:, :-1].numpy()
-    #     return labels, cord
-    #
-    # def class_to_label(self, x):
-    #     return self.classes[int(x)]
-
-    # def plot_boxes(self, results, frame):
-    #     labels, cord = results
-    #     n = len(labels)
-    #     x_shape, y_shape = frame.shape[1], frame.shape[0]
-    #     for i in range(n):
-    #         row = cord[i]
-    #         if row[4] >= confident:
-    #             x1, y1, x2, y2 = int(row[0] * x_shape), int(row[1] * y_shape), int(row[2] * x_shape), int(row[3] * y_shape)
-    #             bgr = (0, 255, 0)
-    #             cv2.rectangle(frame, (x1, y1), (x2, y2), bgr, 2)
-    #             cv2.putText(frame, self.class_to_label(labels[i]), (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.9, bgr, 2)
-    #     return frame
-
-    # def run_program(self):
-    #     player = self.get_video_from_url()
-    #     assert player.isOpened()
-    #     x_shape = int(player.get(cv2.CAP_PROP_FRAME_WIDTH))
-    #     y_shape = int(player.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    #     # four_cc = cv2.VideoWriter_fourcc(*"MJPG")
-    #     # out = cv2.VideoWriter(self.out_file, four_cc, 20, (x_shape, y_shape))
-    #     while True:
-    #         start_time = time()
-    #         ret, frame = player.read()
-    #         assert ret
-    #         results = self.score_frame(frame)
-    #         frame = self.plot_boxes(results, frame)
-    #         end_time = time()
-    #         fps = 1 / (np.round(end_time - start_time, 3))
-    #         print((f"Frame Per Second : {round(fps, 3, )} FPS"))
-    #         self.signal.emit(frame)
-
-    # def stop(self):
-    #     print("stop threading", self.index)
-    #     self.terminate()
+    def btnStop_conveyor_clicked(self):
+        STOP = [0x02, 0x53, 0x54, 0x4F, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x03]
+        n = self.ser[1].sendSerial(bytes(STOP))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
