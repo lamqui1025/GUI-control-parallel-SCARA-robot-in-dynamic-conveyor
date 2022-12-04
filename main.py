@@ -26,9 +26,9 @@ import numpy as np
 import random
 
 class ModelYolov7:
-    source = 0
+    source = 1
     device = ''
-    weights = 'yolov7.pt'
+    weights = 'best-1.pt'
     image_size = 640
     conf_thres = 0.75
     iou_thres = 0.45
@@ -111,6 +111,9 @@ class MainWindow(QMainWindow):
         self.uic.btnStop.clicked.connect(self.stop_capture_video)
         self.uic.btnRun_conveyor.clicked.connect(self.btnRun_conveyor_clicked)
         self.uic.btnStop_conveyor.clicked.connect(self.btnStop_conveyor_clicked)
+        self.uic.btnReset_robot.clicked.connect(self.btnReset_robot_clicked)
+        self.uic.btnStart_robot.clicked.connect(self.btnStart_robot_clicked)
+        self.uic.btnStop_robot.clicked.connect(self.btnStop_robot_clicked)
 
         self.timer_video.timeout.connect(self.show_video_frame)
 
@@ -129,7 +132,8 @@ class MainWindow(QMainWindow):
         self.ser[1].message.connect(self.Received_conveyor)
 
         # portss = QtSerialPort.QSerialPortInfo().availablePorts()
-        # print(portss)
+
+        self.test_lsv()
 
     def closeEvent(self, event):
         self.stop_capture_video()
@@ -197,10 +201,6 @@ class MainWindow(QMainWindow):
                     if det is not None and len(det):
                         # Rescale boxes from img_size to im0 size
                         det[:, :4] = scale_coords(img.shape[2:], det[:, :4], showimg.shape).round()
-
-                        # QUI adding - cls
-                        print(det)
-                        print(reversed(det))
                         # Write results
                         for *xyxy, conf, cls in reversed(det):
                             label = '%s %.2f' % (self.names[int(cls)], conf)
@@ -231,13 +231,10 @@ class MainWindow(QMainWindow):
                                 categories = tracked_dets[:, 4]
                                 confidences = None
 
-                                print('bbox_xyxy=', bbox_xyxy)
-                                print('identities=', identities)
-                                print('categories=', categories)
-                                print('confidences=', confidences)
-
-
-
+                                # print('bbox_xyxy=', bbox_xyxy)
+                                # print('identities=', identities)
+                                # print('categories=', categories)
+                                # print('confidences=', confidences)
                                 for i, box in enumerate(bbox_xyxy):
                                     x1, y1, x2, y2 = [int(i) for i in box]
                                     cat = int(categories[i]) if categories is not None else 0
@@ -247,7 +244,8 @@ class MainWindow(QMainWindow):
                                     cv2.circle(showimg, center, radius=0, color=(0, 0, 255), thickness=3)   #draw center point
                                     tl = 2 or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
                                     tf = max(tl, 1)  # font thickness
-                                    cv2.putText(showimg, 'ID:'+str(id), center, 0, tl/3, self.colors[cat], thickness=tf, lineType=cv2.LINE_AA)
+                                    cv2.putText(showimg, 'ID:'+str(id), center, 0, tl/3, self.colors[cat],
+                                                thickness=tf, lineType=cv2.LINE_AA)
 
                                 # if opt.show_track:
                                 #     # loop over tracks
@@ -299,11 +297,11 @@ class MainWindow(QMainWindow):
         parity = self.uic.cbParity.currentIndex()
         self.ser[0].Conf(portName=portname, baudrate=baud, parity=parity)
 
-        print("name:", self.ser[0].serialPort.portName(), "---baud:", self.ser[0].serialPort.baudRate(), "---Parity:", self.ser[0].serialPort.parity())
+        print("name:", self.ser[0].serialPort.portName(), "---baud:",
+              self.ser[0].serialPort.baudRate(), "---Parity:", self.ser[0].serialPort.parity())
 
         self.ser[0].start()
         self.ser[0].Open()
-        self.ser[0].sendSerial('ABCD'.encode('utf-8'))
 
     def ClosePort(self):
         self.ser[0].Close()
@@ -315,22 +313,25 @@ class MainWindow(QMainWindow):
             self.ClosePort_conveyor()
         else:
             self.OpenPort_conveyor()
+        self.count = 0
+        self.pulse = 0
     def OpenPort_conveyor(self):
         portname = self.uic.cbPort_conveyor.currentText()
         baud = 9600
         parity = 0  #NONE
         # parity = self.uic.cbParity.currentIndex()
         self.ser[1].Conf(portName=portname, baudrate=baud, parity=parity)
-
         print("name:", self.ser[1].serialPort.portName(), "---baud:", self.ser[0].serialPort.baudRate(), "---Parity:",
               self.ser[1].serialPort.parity())
 
         self.ser[1].start()
         self.ser[1].Open()
 
-        pid = [0x02, 0x53, 0x50, 0x49, 0x44, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x05, 0x00, 0x16, 0x03]
+        pid = [0x02, 0x53, 0x50, 0x49, 0x44, 0x00, 0x00, 0x00,
+               0x05, 0x00, 0x00, 0x05, 0x01, 0x32, 0x02, 0x00, 0x16, 0x03]
         self.ser[1].sendSerial(bytes(pid))
-    def ClosePort_conveyor(self):
+    def ClosePort_conveyor(self
+                           ):
         self.ser[1].Close()
         self.ser[1].terminate()
 
@@ -361,35 +362,58 @@ class MainWindow(QMainWindow):
         print('rec robot=', buff)
 
     def Received_conveyor(self, buff):
-        print('buff=', buff)
-        print(len(buff))
-        if len(buff) == 18:
+        # print('buff=', buff)
+        # print(len(buff))
+        if len(buff) == 18 and buff[1:5]==b'SRUN':
             if buff[0]==2 and buff[17]==3:
+                self.count+=1
                 data = buff[8:16]
-                print('data=', data)
                 direct = data[5]
-                pulse = data[6]*256 + data[7]
-                print('pulse=', pulse)
-                vel = int(pulse * 36000 / 4 / 11 / 56)   # độ trên giây
-                self.uic.lb_realVel.setText(str(vel))
+                self.pulse += data[6]*256 + data[7]
+                # print('pulse=', pulse)
+                if self.count==10:
+                    vel = int(self.pulse * 3600 / 4 / 11 / 56)   # độ trên giây
+                    print(vel, 'dec/s')
+                    self.uic.lb_realVel.setText(str(vel))
+                    self.count = 0
+                    self.pulse = 0
+
 
     def btnRun_conveyor_clicked(self):
         direct = 0x52   #R (REVERSE)
         direct = 0x46   #F (FORWARD)
-
+        self.count = 0
+        self.pulse = 0
         speed = self.uic.spinBox_Vel.value()
         sp0 = speed %256
         sp1 = speed //256
 
-        runSpeed = [0x02, 0x53, 0x52, 0x55, 0x4E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, direct, sp1, sp0, 0x16, 0x03]
+        runSpeed = [0x02, 0x53, 0x52, 0x55, 0x4E, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, direct, sp1, sp0, 0x16, 0x03]
         self.ser[1].sendSerial(bytes(runSpeed))
 
     def btnStop_conveyor_clicked(self):
-        STOP = [0x02, 0x53, 0x54, 0x4F, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x03]
-        n = self.ser[1].sendSerial(bytes(STOP))
+        STOP = [0x02, 0x53, 0x54, 0x4F, 0x50, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x03]
+        self.ser[1].sendSerial(bytes(STOP))
+        self.count = 0
+        self.pulse = 0
+        self.uic.lb_realVel.setText('0')
 
+    def btnReset_robot_clicked(self):
+        RESET = [0x02, 0x32, 0x03]  # 0x02 '2' 0x03
+        self.ser[0].sendSerial(bytes(RESET))
+    def btnStart_robot_clicked(self):
+        START = [0x02, 0x30, 0x03]  # 0x02 '0' 0x03
+        self.ser[0].sendSerial(bytes(START))
+    def btnStop_robot_clicked(self):
+        STOP = [0x02, 0x31, 0x03]   # 0x02 '1' 0x03
+        self.ser[0].sendSerial(bytes(STOP))
     def test_lsv(self):
-        self.uic.lsv_stack_object.item
+        lst = ["aaaa", 'bbb', 'ccc']
+        listModel = QtCore.QStringListModel()
+        listModel.setStringList(lst)
+        self.uic.lsv_stack_object.setModel(listModel)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
