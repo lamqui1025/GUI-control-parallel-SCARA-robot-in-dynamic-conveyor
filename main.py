@@ -15,6 +15,7 @@ from utils.plots import plot_one_box
 
 from sort import *
 from threadSerial import serialThread
+from ScaleCam import  ScaleCam
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -24,6 +25,8 @@ import serial.tools.list_ports
 import cv2
 import numpy as np
 import random
+
+
 
 class ModelYolov7:
     source = 1
@@ -94,6 +97,12 @@ class MainWindow(QMainWindow):
     track = yolo_v7.track
 
     sort_tracker = yolo_v7.sort_tracker
+    # LIBRARY
+    scam = ScaleCam()
+
+    #   FLAG    .....
+    on_yolo = False
+    is_scaleCam = False
     def __init__(self):
         # self.main_win = QMainWindow()
         super().__init__()
@@ -114,6 +123,9 @@ class MainWindow(QMainWindow):
         self.uic.btnReset_robot.clicked.connect(self.btnReset_robot_clicked)
         self.uic.btnStart_robot.clicked.connect(self.btnStart_robot_clicked)
         self.uic.btnStop_robot.clicked.connect(self.btnStop_robot_clicked)
+        self.uic.btnTest_robot.clicked.connect(self.btnTest_robot_clicked)
+        self.uic.btnScaleCam.clicked.connect(self.btnScaleCam_clicked)
+        self.uic.btnYolo_work.clicked.connect(self.btnYolo_clicked)
 
         self.timer_video.timeout.connect(self.show_video_frame)
 
@@ -172,109 +184,142 @@ class MainWindow(QMainWindow):
     #     convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
     #     p = convert_to_Qt_format.scaled(800, 600, Qt.KeepAspectRatio)
     #     return QPixmap.fromImage(p)
+    def btnYolo_clicked(self):
+        if self.on_yolo:
+            self.on_yolo = False
+        else:
+            self.is_scaleCam = False
+            self.on_yolo = True
+    def btnScaleCam_clicked(self):
+        if self.is_scaleCam:
+            self.is_scaleCam = False
+        else:
+            self.on_yolo = False
+            self.is_scaleCam = True
+
     def show_video_frame(self):
         name_list = []
         flag, img = self.cap.read()
 
         if img is not None:
-            showimg = img
-            with torch.no_grad():
-                img = letterbox(img, new_shape=self.image_size)[0]
-                # Convert
-                # BGR to RGB, to 3x416x416
-                img = img[:, :, ::-1].transpose(2, 0, 1)
-                img = np.ascontiguousarray(img)
-                img = torch.from_numpy(img).to(self.device)
-                img = img.half() if self.half else img.float()  # uint8 to fp16/32
-                img /= 255.0  # 0 - 255 to 0.0 - 1.0
-                if img.ndimension() == 3:
-                    img = img.unsqueeze(0)
-                # Inference
-                pred = self.model(img, augment=self.augment)[0]
+            frame = img
+            if self.on_yolo:
+                frame, bbox, identities, categories = self.detect_and_track(frame)
 
-                # Apply NMS
-                pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, classes=self.classes,
-                                           agnostic=self.agnostic_nms)
-                # print('pred : ', pred)
-                # Process detections
-                for i, det in enumerate(pred):  # detections per image
-                    if det is not None and len(det):
-                        # Rescale boxes from img_size to im0 size
-                        det[:, :4] = scale_coords(img.shape[2:], det[:, :4], showimg.shape).round()
-                        # Write results
-                        for *xyxy, conf, cls in reversed(det):
-                            label = '%s %.2f' % (self.names[int(cls)], conf)
-                            name_list.append(self.names[int(cls)])
-                            print(label)
-                            # clss.append(cls)
-                            plot_one_box(xyxy, showimg, label=label, color=self.colors[int(cls)], line_thickness=2)
-                            # c1, c2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
-                            # # print('c1: ', c1, 'c2: ', c2)
-                            # center = (int((c1[0]+c2[0])/2), int((c1[1]+c2[1])/2))
-                            # cv2.circle(showimg, center, radius=0, color=(0,0,255), thickness=3)
+            elif self.is_scaleCam:
+                frame, P1, P2, self.pH, self.pW= self.scam.scaleCam(frame)
+                print(P1, P2, self.pH, self.pW)
+                if self.scam.scam_completed:
+                    dis12 = self.scam.distance(P1[0], P1[1], P2[0], P2[1])
+                    self.pp1cm = dis12/12
 
-                        # Tracking ----***************
-                        dets_to_sort = np.empty((0, 6))
-                        # NOTE: We send in detected object class too
-                        for x1, y1, x2, y2, conf, detclass in det.cpu().detach().numpy():
-                            dets_to_sort = np.vstack((dets_to_sort,
-                                                      np.array([x1, y1, x2, y2, conf, detclass])))
-
-                        if self.track:
-                            tracked_dets = self.sort_tracker.update(dets_to_sort, unique_color=False)
-                            tracks = self.sort_tracker.getTrackers()
-
-                            # draw boxes for visualization
-                            if len(tracked_dets) > 0:
-                                bbox_xyxy = tracked_dets[:, :4]
-                                identities = tracked_dets[:, 8]
-                                categories = tracked_dets[:, 4]
-                                confidences = None
-
-                                # print('bbox_xyxy=', bbox_xyxy)
-                                # print('identities=', identities)
-                                # print('categories=', categories)
-                                # print('confidences=', confidences)
-                                for i, box in enumerate(bbox_xyxy):
-                                    x1, y1, x2, y2 = [int(i) for i in box]
-                                    cat = int(categories[i]) if categories is not None else 0
-                                    id = int(identities[i]) if identities is not None else 0
-
-                                    center = (int((x1+x2)/2), int((y1+y2)/2))
-                                    cv2.circle(showimg, center, radius=0, color=(0, 0, 255), thickness=3)   #draw center point
-                                    tl = 2 or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
-                                    tf = max(tl, 1)  # font thickness
-                                    cv2.putText(showimg, 'ID:'+str(id), center, 0, tl/3, self.colors[cat],
-                                                thickness=tf, lineType=cv2.LINE_AA)
-
-                                # if opt.show_track:
-                                #     # loop over tracks
-                                #     for t, track in enumerate(tracks):
-                                #         track_color = colors[int(track.detclass)] if not opt.unique_track_color else \
-                                #         sort_tracker.color_list[t]
-                                #
-                                #         [cv2.line(im0, (int(track.centroidarr[i][0]),
-                                #                         int(track.centroidarr[i][1])),
-                                #                   (int(track.centroidarr[i + 1][0]),
-                                #                    int(track.centroidarr[i + 1][1])),
-                                #                   track_color, thickness=opt.thickness)
-                                #          for i, _ in enumerate(track.centroidarr)
-                                #          if i < len(track.centroidarr) - 1]
-                        else:
-                            bbox_xyxy = dets_to_sort[:, :4]
-                            identities = None
-                            categories = dets_to_sort[:, 5]
-                            confidences = dets_to_sort[:, 4]
-
-
-            # show = showimg
-            show = cv2.resize(showimg, (640, 480))
-
-            self.result = cv2.cvtColor(show, cv2.COLOR_BGR2RGB)
+            frame[:, 560:561] = [0, 255, 0]
+            frame[:, 639:640] = [0, 255, 0]
+            self.result = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             showImage = QtGui.QImage(self.result.data, self.result.shape[1], self.result.shape[0],
                                      QtGui.QImage.Format_RGB888)
             # showImage = showImage.scaled(700, 550, Qt.KeepAspectRatio)
             self.uic.lbScreen.setPixmap(QtGui.QPixmap.fromImage(showImage))
+
+
+            # showimg = img
+            # with torch.no_grad():
+            #     img = letterbox(img, new_shape=self.image_size)[0]
+            #     # Convert
+            #     # BGR to RGB, to 3x416x416
+            #     img = img[:, :, ::-1].transpose(2, 0, 1)
+            #     img = np.ascontiguousarray(img)
+            #     img = torch.from_numpy(img).to(self.device)
+            #     img = img.half() if self.half else img.float()  # uint8 to fp16/32
+            #     img /= 255.0  # 0 - 255 to 0.0 - 1.0
+            #     if img.ndimension() == 3:
+            #         img = img.unsqueeze(0)
+            #     # Inference
+            #     pred = self.model(img, augment=self.augment)[0]
+            #
+            #     # Apply NMS
+            #     pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, classes=self.classes,
+            #                                agnostic=self.agnostic_nms)
+            #     # print('pred : ', pred)
+            #     # Process detections
+            #     for i, det in enumerate(pred):  # detections per image
+            #         if det is not None and len(det):
+            #             # Rescale boxes from img_size to im0 size
+            #             det[:, :4] = scale_coords(img.shape[2:], det[:, :4], showimg.shape).round()
+            #             # Write results
+            #             for *xyxy, conf, cls in reversed(det):
+            #                 label = '%s %.2f' % (self.names[int(cls)], conf)
+            #                 name_list.append(self.names[int(cls)])
+            #                 print(label)
+            #                 # clss.append(cls)
+            #                 plot_one_box(xyxy, showimg, label=label, color=self.colors[int(cls)], line_thickness=2)
+            #                 # c1, c2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
+            #                 # # print('c1: ', c1, 'c2: ', c2)
+            #                 # center = (int((c1[0]+c2[0])/2), int((c1[1]+c2[1])/2))
+            #                 # cv2.circle(showimg, center, radius=0, color=(0,0,255), thickness=3)
+            #
+            #             # Tracking ----***************
+            #             dets_to_sort = np.empty((0, 6))
+            #             # NOTE: We send in detected object class too
+            #             for x1, y1, x2, y2, conf, detclass in det.cpu().detach().numpy():
+            #                 dets_to_sort = np.vstack((dets_to_sort,
+            #                                           np.array([x1, y1, x2, y2, conf, detclass])))
+            #
+            #             if self.track:
+            #                 tracked_dets = self.sort_tracker.update(dets_to_sort, unique_color=False)
+            #                 tracks = self.sort_tracker.getTrackers()
+            #
+            #                 # draw boxes for visualization
+            #                 if len(tracked_dets) > 0:
+            #                     bbox_xyxy = tracked_dets[:, :4]
+            #                     identities = tracked_dets[:, 8]
+            #                     categories = tracked_dets[:, 4]
+            #                     confidences = None
+            #
+            #                     # print('bbox_xyxy=', bbox_xyxy)
+            #                     # print('identities=', identities)
+            #                     # print('categories=', categories)
+            #                     # print('confidences=', confidences)
+            #                     for i, box in enumerate(bbox_xyxy):
+            #                         x1, y1, x2, y2 = [int(i) for i in box]
+            #                         cat = int(categories[i]) if categories is not None else 0
+            #                         id = int(identities[i]) if identities is not None else 0
+            #
+            #                         center = (int((x1+x2)/2), int((y1+y2)/2))
+            #                         cv2.circle(showimg, center, radius=0, color=(0, 0, 255), thickness=3)   #draw center point
+            #                         tl = 2 or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
+            #                         tf = max(tl, 1)  # font thickness
+            #                         cv2.putText(showimg, 'ID:'+str(id), center, 0, tl/3, self.colors[cat],
+            #                                     thickness=tf, lineType=cv2.LINE_AA)
+            #
+            #                     # if opt.show_track:
+            #                     #     # loop over tracks
+            #                     #     for t, track in enumerate(tracks):
+            #                     #         track_color = colors[int(track.detclass)] if not opt.unique_track_color else \
+            #                     #         sort_tracker.color_list[t]
+            #                     #
+            #                     #         [cv2.line(im0, (int(track.centroidarr[i][0]),
+            #                     #                         int(track.centroidarr[i][1])),
+            #                     #                   (int(track.centroidarr[i + 1][0]),
+            #                     #                    int(track.centroidarr[i + 1][1])),
+            #                     #                   track_color, thickness=opt.thickness)
+            #                     #          for i, _ in enumerate(track.centroidarr)
+            #                     #          if i < len(track.centroidarr) - 1]
+            #             else:
+            #                 bbox_xyxy = dets_to_sort[:, :4]
+            #                 identities = None
+            #                 categories = dets_to_sort[:, 5]
+            #                 confidences = dets_to_sort[:, 4]
+            #
+            #
+            # # show = showimg
+            # show = cv2.resize(showimg, (640, 480))
+            #
+            # self.result = cv2.cvtColor(show, cv2.COLOR_BGR2RGB)
+            # showImage = QtGui.QImage(self.result.data, self.result.shape[1], self.result.shape[0],
+            #                          QtGui.QImage.Format_RGB888)
+            # # showImage = showImage.scaled(700, 550, Qt.KeepAspectRatio)
+            # self.uic.lbScreen.setPixmap(QtGui.QPixmap.fromImage(showImage))
 
         else:
             self.timer_video.stop()
@@ -282,6 +327,112 @@ class MainWindow(QMainWindow):
             self.out.release()
             self.uic.lbScreen.clear()
             self.uic.btnStart.setDisabled(False)
+
+    def detect_and_track(self, img):
+        bbox_xyxy = []
+        identities = []
+        categories = []
+        showimg = img
+        with torch.no_grad():
+            img = letterbox(img, new_shape=self.image_size)[0]
+            # Convert
+            # BGR to RGB, to 3x416x416
+            img = img[:, :, ::-1].transpose(2, 0, 1)
+            img = np.ascontiguousarray(img)
+            img = torch.from_numpy(img).to(self.device)
+            img = img.half() if self.half else img.float()  # uint8 to fp16/32
+            img /= 255.0  # 0 - 255 to 0.0 - 1.0
+            if img.ndimension() == 3:
+                img = img.unsqueeze(0)
+            # Inference
+            pred = self.model(img, augment=self.augment)[0]
+
+            # Apply NMS
+            pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, classes=self.classes,
+                                       agnostic=self.agnostic_nms)
+            # print('pred : ', pred)
+            # Process detections
+            for i, det in enumerate(pred):  # detections per image
+                if det is not None and len(det):
+                    # Rescale boxes from img_size to im0 size
+                    det[:, :4] = scale_coords(img.shape[2:], det[:, :4], showimg.shape).round()
+                    # Write results
+                    for *xyxy, conf, cls in reversed(det):
+                        label = '%s %.2f' % (self.names[int(cls)], conf)
+                        # name_list.append(self.names[int(cls)])
+                        print(label)
+                        # clss.append(cls)
+                        plot_one_box(xyxy, showimg, label=label, color=self.colors[int(cls)], line_thickness=2)
+                        # c1, c2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
+                        # # print('c1: ', c1, 'c2: ', c2)
+                        # center = (int((c1[0]+c2[0])/2), int((c1[1]+c2[1])/2))
+                        # cv2.circle(showimg, center, radius=0, color=(0,0,255), thickness=3)
+
+                    # Tracking ----***************
+                    dets_to_sort = np.empty((0, 6))
+                    # NOTE: We send in detected object class too
+                    for x1, y1, x2, y2, conf, detclass in det.cpu().detach().numpy():
+                        dets_to_sort = np.vstack((dets_to_sort,
+                                                  np.array([x1, y1, x2, y2, conf, detclass])))
+
+                    if self.track:
+                        tracked_dets = self.sort_tracker.update(dets_to_sort, unique_color=False)
+                        tracks = self.sort_tracker.getTrackers()
+
+                        # print(tracked_dets)
+                        # draw boxes for visualization
+                        if len(tracked_dets) > 0:
+                            bbox_xyxy = tracked_dets[:, :4]
+                            identities = tracked_dets[:, 8]
+                            categories = tracked_dets[:, 4]
+                            confidences = None
+
+                            # print('bbox_xyxy=', bbox_xyxy)
+                            # print('identities=', identities)
+                            # print('categories=', categories)
+                            # print('confidences=', confidences)
+                            for i, box in enumerate(bbox_xyxy):
+                                x1, y1, x2, y2 = [int(i) for i in box]
+                                cat = int(categories[i]) if categories is not None else 0
+                                id = int(identities[i]) if identities is not None else 0
+
+                                center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+                                cv2.circle(showimg, center, radius=0, color=(0, 0, 255),
+                                           thickness=3)  # draw center point
+                                tl = 2 or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
+                                tf = max(tl, 1)  # font thickness
+                                cv2.putText(showimg, 'ID:' + str(id), center, 0, tl / 3, self.colors[cat],
+                                            thickness=tf, lineType=cv2.LINE_AA)
+
+                            # if opt.show_track:
+                            #     # loop over tracks
+                            #     for t, track in enumerate(tracks):
+                            #         track_color = colors[int(track.detclass)] if not opt.unique_track_color else \
+                            #         sort_tracker.color_list[t]
+                            #
+                            #         [cv2.line(im0, (int(track.centroidarr[i][0]),
+                            #                         int(track.centroidarr[i][1])),
+                            #                   (int(track.centroidarr[i + 1][0]),
+                            #                    int(track.centroidarr[i + 1][1])),
+                            #                   track_color, thickness=opt.thickness)
+                            #          for i, _ in enumerate(track.centroidarr)
+                            #          if i < len(track.centroidarr) - 1]
+                    else:
+                        bbox_xyxy = dets_to_sort[:, :4]
+                        identities = None
+                        categories = dets_to_sort[:, 5]
+                        confidences = dets_to_sort[:, 4]
+
+        show = showimg
+        # show = cv2.resize(showimg, (640, 480))
+        return show, bbox_xyxy, identities, categories
+
+        # self.result = cv2.cvtColor(show, cv2.COLOR_BGR2RGB)
+        # showImage = QtGui.QImage(self.result.data, self.result.shape[1], self.result.shape[0],
+        #                          QtGui.QImage.Format_RGB888)
+        # # showImage = showImage.scaled(700, 550, Qt.KeepAspectRatio)
+        # self.uic.lbScreen.setPixmap(QtGui.QPixmap.fromImage(showImage))
+
     # ----------------------------------
 
     def btnConnect_clicked(self):
@@ -358,8 +509,46 @@ class MainWindow(QMainWindow):
             self.uic.btnConnect_conveyor.setText('Open')
             self.uic.cbPort_conveyor.setEnabled(True)
 
+    recdata=[]
+    f_rec= False
+    r_completed = False
     def Received_robot(self, buff):
         print('rec robot=', buff)
+        for d in buff:
+            if int(d)==2:
+                self.f_rec = True
+                self.r_completed = False
+            elif int(d)==3:
+                self.f_rec = False
+                self.r_completed = True
+            elif self.f_rec:
+                self.recdata.append(d)
+
+        if self.r_completed:
+            self.r_completed = False
+            data = self.recdata
+            self.recdata = []
+            print(data)
+            if data[0]==0:
+                print('Thuc hien thanh cong!')
+                if data[1]==1:
+                    print('Positive Workspace!')
+                else:
+                    print('Negative Workspace!')
+                sign1 = 1 if data[2]== 1 else -1
+                sign4 = 1 if data[5]== 1 else -1
+                theta1 = sign1*(data[3]*256 + data[4])
+                theta4 = sign4*(data[6]*256 + data[7])
+
+                self.uic.lb_vtheta1.setText(str(theta1))
+                self.uic.lb_vtheta4.setText(str(theta4))
+            elif data[0]==1:
+                print('Phan giai yeu cau that bai!')
+            elif data[0]==2:
+                print('Thuc hien yeu cau that bai!')
+
+
+
 
     def Received_conveyor(self, buff):
         # print('buff=', buff)
@@ -414,6 +603,15 @@ class MainWindow(QMainWindow):
         listModel = QtCore.QStringListModel()
         listModel.setStringList(lst)
         self.uic.lsv_stack_object.setModel(listModel)
+
+    def btnTest_robot_clicked(self):
+        # TEST = [0x02 , '9', '0', '-', '1', '0', '0', '0', '+', '2', '5', '0', '0',
+        #         '+', '1', '0', '0', '0', '+', '2', '5', '0', '0', 0x03]
+        neg = 0x2D
+        pos = 0x2B
+        TEST = [0x02, 0x39, 0x30, neg, 0x31, 0x30, 0x30, 0x30, pos, 0x32, 0x35, 0x30, 0x30,
+                pos, 0x31, 0x30, 0x30, 0x30, pos, 0x32, 0x35, 0x30, 0x30, 0x31, 0x35, 0x31, 0x35, 0x03]
+        self.ser[0].sendSerial(bytes(TEST))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
