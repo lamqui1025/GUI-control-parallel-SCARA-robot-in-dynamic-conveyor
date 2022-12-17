@@ -10,12 +10,15 @@ class ScaleCam:
     pW = None
     scam_completed = False
 
+    def distance_line(self, point, line):
+        [x, y] = point
+        [a, b] = line
+        return abs(a*x - y + b)/np.sqrt(1+a**2)
     def distance(self, a1, a2, b1, b2):
         return np.sqrt((a1 - b1) ** 2 + (a2 - b2) ** 2)
 
     def slove2(self, a1, a2, b1, b2, c1, c2):
         D = a1 * b2 - a2 * b1
-        print('D=', D)
         Dx = c1 * b2 - c2 * b1
         Dy = a1 * c2 - a2 * c1
         x = Dx / D
@@ -63,7 +66,7 @@ class ScaleCam:
                     else:
                         self.P1 = p2
                         self.P2 = p1
-                print('P1=', self.P1, 'P2=', self.P2)
+                # print('P1=', self.P1, 'P2=', self.P2)
                 dist = self.distance(self.P1[0], self.P1[1], self.P2[0], self.P2[1])
                 # print('distance=', dist)
                 a, b = self.slove2(self.P1[0], self.P2[0], 1, 1, self.P1[1], self.P2[1])
@@ -75,16 +78,16 @@ class ScaleCam:
                 self.pA = [paA, pbA]
                 self.pW = self.pA
                 # print('pa=', paA, 'pb=', pbA)
-                ppA1 = (0, int(paA * 100 + pbA))
-                ppA2 = (1200, int(paA * 600 + pbA))
+                ppA1 = (0, int(paA * 0 + pbA))
+                ppA2 = (640, int(paA * 640 + pbA))
                 # print(ppA1, ppA2)
                 imgcp2 = cv2.line(imgcp2, ppA1, ppA2, color=(0, 255, 255), thickness=1)
 
                 paB, pbB = self.perpendicular_line(a, self.P2[0], self.P2[1] - dist / 12)
                 self.pB = [paB, pbB]
                 # print('pa=', paB, 'pb=', pbB)
-                ppB1 = (0, int(paB * 100 + pbB))
-                ppB2 = (1200, int(paB * 600 + pbB))
+                ppB1 = (0, int(paB * 0 + pbB))
+                ppB2 = (640, int(paB * 640 + pbB))
                 # print(ppB1, ppB2)
                 imgcp2 = cv2.line(imgcp2, ppB1, ppB2, color=(0, 255, 255), thickness=1)
 

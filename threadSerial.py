@@ -21,10 +21,6 @@ class serialThread(QThread):
     #         self.message.emit(str(veri))
 
     def receive(self):
-        # while True:
-        #     rec = self.serialPort.readAll()
-        #     print(rec)
-        #     self.message.emit(str(rec))
         rec = self.serialPort.readAll()
         self.message.emit(bytes(rec))
     def Conf(self, portName, baudrate, parity):

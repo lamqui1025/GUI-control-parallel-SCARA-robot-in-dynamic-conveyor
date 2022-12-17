@@ -15,7 +15,8 @@ from utils.plots import plot_one_box
 
 from sort import *
 from threadSerial import serialThread
-from ScaleCam import  ScaleCam
+from ScaleCam import ScaleCam
+from controlScara import Scara
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -25,8 +26,16 @@ import serial.tools.list_ports
 import cv2
 import numpy as np
 import random
+import queue
 
-
+class Objects:
+    def __init__(self, id, cls,center, time):
+        self.id = id
+        self.cls = cls
+        self.center = center
+        self.time = time
+        self.lstcens = []
+        self.vel = None
 
 class ModelYolov7:
     source = 1
@@ -99,10 +108,20 @@ class MainWindow(QMainWindow):
     sort_tracker = yolo_v7.sort_tracker
     # LIBRARY
     scam = ScaleCam()
+    scara = Scara()
 
     #   FLAG    .....
     on_yolo = False
     is_scaleCam = False
+
+    # argument
+    dx_con = -288    # 288 mm
+    dy_con = 210    # 205 mm
+
+    #   properties
+    current_id = 0
+    STACK = queue.Queue()
+    objs = []
     def __init__(self):
         # self.main_win = QMainWindow()
         super().__init__()
@@ -129,9 +148,14 @@ class MainWindow(QMainWindow):
 
         self.timer_video.timeout.connect(self.show_video_frame)
 
+        # Timer To Check all Status
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.Timer_tick)
         self.timer.start(200)
+        # Timer To PICK object
+        self.timer_pick_object = QtCore.QTimer()
+        self.timer_pick_object.timeout.connect(self.pickObjects_timer_tick)
+        self.timer_pick_object.start(30)
 
         self.ser = {}
         self.ser[0] = serialThread()
@@ -187,34 +211,86 @@ class MainWindow(QMainWindow):
     def btnYolo_clicked(self):
         if self.on_yolo:
             self.on_yolo = False
+            self.uic.btnYolo_work.setText('START')
         else:
             self.is_scaleCam = False
             self.on_yolo = True
+            self.uic.btnYolo_work.setText('STOP')
+            self.uic.btnScaleCam.setText('Scale')
     def btnScaleCam_clicked(self):
         if self.is_scaleCam:
             self.is_scaleCam = False
+            self.uic.btnScaleCam.setText('Scale')
         else:
             self.on_yolo = False
             self.is_scaleCam = True
+            self.uic.btnScaleCam.setText('unScale')
+            self.uic.btnYolo_work.setText('START')
 
     def show_video_frame(self):
-        name_list = []
         flag, img = self.cap.read()
 
         if img is not None:
             frame = img
             if self.on_yolo:
-                frame, bbox, identities, categories = self.detect_and_track(frame)
+                frame, bboxs, identities, categories = self.detect_and_track(frame)
+                time_detected = time_synchronized()
+                if self.scam.scam_completed:
+                    for i in range(len(identities)-1, -1, -1):
+                        bbox_xyxy = bboxs[i]
+                        id = identities[i]
+                        cat = categories[i]
+                        print(bbox_xyxy, id, cat)
+                        center = (bbox_xyxy[0:2] + bbox_xyxy[2:4])/2
+                        # dH = self.scam.distance_line(center, self.pH)
+                        # dW = self.scam.distance_line(center, self.pW)
+                        # print('point:', center, dH*10/self.pp1cm, dW*10/self.pp1cm, 'Time:', time_detected)
+                        # dx = round(dH*10/self.pp1cm + self.dx_con, 3)
+                        # dy = round(dW*10/self.pp1cm + self.dy_con, 3)
+                        # obj = Objects(id, cat, dx, dy, time_detected)
+                        # if id > self.current_id:
+                        #     self.current_id = id
+                        #     # self.STACK.put(obj)
+                        if center[0]>80 and center[0]<560:
+                            if id <= self.current_id:
+                                for j in range(len(self.objs)):
+                                    if self.objs[j].id == id:
+                                        pre_center = self.objs[j].center
+                                        pre_time = self.objs[j].time
+                                        self.objs[j].center = center
+                                        self.objs[j].time = time_detected
+                                        self.objs[j].lstcens.append(center)
+                                        self.objs[j].vel = abs(pre_center - center)/(time_detected - pre_time)
+                            else:
+                                obj = Objects(id, cat, center, time_detected)
+                                obj.lstcens.append(center)
+                                self.objs.append(obj)
+                                self.current_id = id
+                        elif center[0]<=80:
+                            objs = []
+                            for j in range(len(self.objs)):
+                                if self.objs[j].id == id:
+                                    # add obj in STACK
+                                    self.STACK.put(self.objs[j])
+                                    # del obj in list object
+                                else:
+                                    objs.append(self.objs[j])
+                            self.objs = objs
+
+
 
             elif self.is_scaleCam:
-                frame, P1, P2, self.pH, self.pW= self.scam.scaleCam(frame)
+                frame, P1, P2, self.pH, self.pW = self.scam.scaleCam(frame)
+                self.scara.set_pH_pW(pH=self.pH, pW=self.pW)
                 print(P1, P2, self.pH, self.pW)
                 if self.scam.scam_completed:
                     dis12 = self.scam.distance(P1[0], P1[1], P2[0], P2[1])
                     self.pp1cm = dis12/12
+                    self.scara.set_pp1cm(dis12/12)
 
             frame[:, 560:561] = [0, 255, 0]
             frame[:, 639:640] = [0, 255, 0]
+            frame[:, 80] = [0, 255, 0]
             self.result = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             showImage = QtGui.QImage(self.result.data, self.result.shape[1], self.result.shape[0],
                                      QtGui.QImage.Format_RGB888)
@@ -481,8 +557,7 @@ class MainWindow(QMainWindow):
         pid = [0x02, 0x53, 0x50, 0x49, 0x44, 0x00, 0x00, 0x00,
                0x05, 0x00, 0x00, 0x05, 0x01, 0x32, 0x02, 0x00, 0x16, 0x03]
         self.ser[1].sendSerial(bytes(pid))
-    def ClosePort_conveyor(self
-                           ):
+    def ClosePort_conveyor(self):
         self.ser[1].Close()
         self.ser[1].terminate()
 
@@ -509,6 +584,13 @@ class MainWindow(QMainWindow):
             self.uic.btnConnect_conveyor.setText('Open')
             self.uic.cbPort_conveyor.setEnabled(True)
 
+        if self.scara.is_running:
+            if not self.scara.isRunning():
+                self.scara.start()
+        else:
+            if self.scara.isRunning():
+                self.scara.terminate()
+
     recdata=[]
     f_rec= False
     r_completed = False
@@ -528,27 +610,38 @@ class MainWindow(QMainWindow):
             self.r_completed = False
             data = self.recdata
             self.recdata = []
-            print(data)
+            print('rec all data:', data)
+
+            if self.scara.is_busy:
+                self.scara.set_busy(False)  # Robot completed working
+
             if data[0]==0:
                 print('Thuc hien thanh cong!')
+                self.scara.set_robot_running(True)   # Set robot is running
                 if data[1]==1:
                     print('Positive Workspace!')
                 else:
                     print('Negative Workspace!')
-                sign1 = 1 if data[2]== 1 else -1
-                sign4 = 1 if data[5]== 1 else -1
-                theta1 = sign1*(data[3]*256 + data[4])
-                theta4 = sign4*(data[6]*256 + data[7])
 
-                self.uic.lb_vtheta1.setText(str(theta1))
-                self.uic.lb_vtheta4.setText(str(theta4))
+                realPul1 = self.fiveCharToValue(data[2:7])
+                realPul4 = self.fiveCharToValue(data[7:12])
+
+                self.scara.set_realPul1(realPul1)
+                self.scara.set_realPul4(realPul4)
+
+                self.uic.lb_vtheta1.setText(str(realPul1))
+                self.uic.lb_vtheta4.setText(str(realPul4))
             elif data[0]==1:
                 print('Phan giai yeu cau that bai!')
             elif data[0]==2:
                 print('Thuc hien yeu cau that bai!')
 
-
-
+    def fiveCharToValue(self, fchar):
+        sign = 1 if fchar[0]== ord('+') else -1
+        value = 0
+        for i in range(1, 5):
+            value += (fchar[i] - ord('0')) * 10**(4-i)
+        return sign*value
 
     def Received_conveyor(self, buff):
         # print('buff=', buff)
@@ -563,6 +656,8 @@ class MainWindow(QMainWindow):
                 if self.count==10:
                     vel = int(self.pulse * 3600 / 4 / 11 / 56)   # độ trên giây
                     print(vel, 'dec/s')
+                    self.velcon = vel
+                    self.scara.set_velcon_dps(vel)
                     self.uic.lb_realVel.setText(str(vel))
                     self.count = 0
                     self.pulse = 0
@@ -598,20 +693,64 @@ class MainWindow(QMainWindow):
     def btnStop_robot_clicked(self):
         STOP = [0x02, 0x31, 0x03]   # 0x02 '1' 0x03
         self.ser[0].sendSerial(bytes(STOP))
+        self.scara.is_running = False
+
+    #   Check and pick object
+    def pickObjects_timer_tick(self):
+        if self.scam.scam_completed and self.scara.is_running and self.scara.isRunning():
+            if not self.STACK.empty() and not self.scara.is_busy:
+                obj = self.STACK.get()
+                self.scara.set_busy(self.scara.pick_object(obj, self.ser[0]))
+
+
+
+
+
     def test_lsv(self):
         lst = ["aaaa", 'bbb', 'ccc']
         listModel = QtCore.QStringListModel()
         listModel.setStringList(lst)
         self.uic.lsv_stack_object.setModel(listModel)
 
+    def valueTolst(self, value):
+        sign = '+' if value>=0 else '-'
+        val = abs(int(value*10))
+        sval = ''
+        for i in range(4):
+            sval = str(val%10) + sval
+            val = val//10
+        sval = sign + sval
+        lstValue = [ord(c) for c in sval]
+        return lstValue
+
     def btnTest_robot_clicked(self):
-        # TEST = [0x02 , '9', '0', '-', '1', '0', '0', '0', '+', '2', '5', '0', '0',
-        #         '+', '1', '0', '0', '0', '+', '2', '5', '0', '0', 0x03]
         neg = 0x2D
         pos = 0x2B
-        TEST = [0x02, 0x39, 0x30, neg, 0x31, 0x30, 0x30, 0x30, pos, 0x32, 0x35, 0x30, 0x30,
-                pos, 0x31, 0x30, 0x30, 0x30, pos, 0x32, 0x35, 0x30, 0x30, 0x31, 0x35, 0x31, 0x35, 0x03]
-        self.ser[0].sendSerial(bytes(TEST))
+        # TEST = [0x02, 0x39, 0x30, neg, 0x31, 0x30, 0x30, 0x30, pos, 0x32, 0x35, 0x30, 0x30,
+        #         pos, 0x31, 0x30, 0x30, 0x30, pos, 0x32, 0x35, 0x30, 0x30, 0x31, 0x35, 0x31, 0x35, 0x03]
+
+        print('STACK.empty()=', self.STACK.empty())
+        if not self.STACK.empty():
+            obj = self.STACK.get()
+            id = obj.id
+            cls = obj.cls
+            dx = obj.dx
+            dy = obj.dy
+
+            pointAx = self.valueTolst(dx)
+            pointAy = self.valueTolst(dy)
+
+            pointBx = [pos, 0x31, 0x30, 0x30, 0x30]
+            pointBy = [pos, 0x32, 0x35, 0x30, 0x30]
+            STX = [0x02]
+            CMD = [0x39, 0x30]      # '9', '0'
+            VEL = [0x31, 0x35]      # '1', '5'
+            ACC = [0x31, 0x35]      # '1', '5'
+            ETX = [0x03]
+
+            sendBuff = STX + CMD + pointAx + pointAy + pointBx + pointBy + VEL + ACC + ETX
+
+            self.ser[0].sendSerial(bytes(sendBuff))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
