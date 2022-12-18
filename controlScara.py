@@ -186,8 +186,8 @@ class Scara(QThread):
         at_predtime = time_synchronized()
         pred_dx = dx + (at_predtime - time_exist)*mmps_con #  du doan vi tri hien tai cua vat the
 
-        pick_dx = pred_dx + 50  # Gap vat truoc du doan 50mm
-        if pick_dx > 123:
+        pick_dx = pred_dx + 45  # Gap vat truoc du doan 50mm
+        if pick_dx > 125:
             print('Fail To PICK this Object!')
             return False
 

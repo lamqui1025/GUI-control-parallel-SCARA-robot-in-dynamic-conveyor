@@ -81,14 +81,11 @@ class ModelYolov7:
                             min_hits=2,
                             iou_threshold=0.2)
 
-    def time_synchronized(self):
-        # pytorch-accurate time
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        return time.time()
-
 class MainWindow(QMainWindow):
     dictParity = {0: 'N', 1: 'E', 2: 'O', 3: 'M'}
+    dictCls = {0: 'USA', 1: 'Germany', 2: 'Vietnam', 3: 'UK',
+               4: 'Brazil', 5: 'Canada', 6: 'Japan', 7: 'Malaysia'}
+
     yolo_v7 = ModelYolov7()
     model = yolo_v7.model
     image_size = yolo_v7.image_size
@@ -122,6 +119,7 @@ class MainWindow(QMainWindow):
     current_id = 0
     STACK = queue.Queue()
     objs = []
+    numof_picked = [0, 0, 0, 0 ,0 ,0 ,0 ,0]
     def __init__(self):
         # self.main_win = QMainWindow()
         super().__init__()
@@ -135,8 +133,8 @@ class MainWindow(QMainWindow):
         # khai bao nut an chay
         self.uic.btnConnect.clicked.connect(self.btnConnect_clicked)
         self.uic.btnConnect_conveyor.clicked.connect(self.btnConnect_conveyor_clicked)
-        self.uic.btnStart.clicked.connect(self.start_capture_video)
-        self.uic.btnStop.clicked.connect(self.stop_capture_video)
+        # self.uic.btnStart.clicked.connect(self.start_capture_video)
+        # self.uic.btnStop.clicked.connect(self.stop_capture_video)
         self.uic.btnRun_conveyor.clicked.connect(self.btnRun_conveyor_clicked)
         self.uic.btnStop_conveyor.clicked.connect(self.btnStop_conveyor_clicked)
         self.uic.btnReset_robot.clicked.connect(self.btnReset_robot_clicked)
@@ -167,16 +165,55 @@ class MainWindow(QMainWindow):
         self.ser[0].message.connect(self.Received_robot)
         self.ser[1].message.connect(self.Received_conveyor)
 
-        # portss = QtSerialPort.QSerialPortInfo().availablePorts()
+        ##  INITIALIZE mainWindow
+        self.initialize_mainWindow()
 
-        self.test_lsv()
+    def initialize_mainWindow(self):
+        self.start_capture_video()
+        self.clsIcon = self.loadIcons()
+
+        # INIT TABLE WIDGETS
+        self.uic.tb_clsObjs.setColumnCount(8)
+        self.uic.tb_clsObjs.setRowCount(2)
+
+        self.uic.tb_clsObjs.setRowHeight(0, 80)
+        print(self.uic.tb_clsObjs.width())
+        for i in range(8):
+            self.uic.tb_clsObjs.setColumnWidth(i, int(round(self.uic.tb_clsObjs.width()/8.5)))
+            lb_cls = QtWidgets.QLabel()
+
+            # imgcls = cv2.imread('clsImg/' + self.dictCls[i] + '.png')
+            # # cv2.imshow(str(i), imgcls)
+            # imgcls = cv2.cvtColor(imgcls, cv2.COLOR_BGR2RGB)
+            # imgcls = cv2.resize(imgcls, (80, 80))
+            # showimg = QtGui.QImage(imgcls, imgcls.shape[1], imgcls.shape[0],
+            #                          QtGui.QImage.Format_RGB888)
+
+            # showImage = showImage.scaled(700, 550, Qt.KeepAspectRatio)
+
+            # lb_cls.setPixmap(QtGui.QPixmap.fromImage(showimg))
+            pixmap = QtGui.QPixmap('clsImg/' + self.dictCls[i] + '.png')
+            pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatio)
+            lb_cls.setPixmap(pixmap)
+            lb_cls.resize(80, 80)
+            self.uic.tb_clsObjs.setCellWidget(0, i, lb_cls)
+            # self.uic.tb_clsObjs.
+
+        self.update_numof_picked()
+        # self.test_lstwidget()
+
+    def loadIcons(self):
+        Icons = []
+        for i in range(8):
+            Icons.append(QtGui.QIcon('clsImg/' + self.dictCls[i] + '.png'))
+        return Icons
 
     def closeEvent(self, event):
         self.stop_capture_video()
 
     def stop_capture_video(self):
         self.timer_video.stop()
-        self.uic.btnStart.setEnabled(True)
+        # self.uic.btnStart.setEnabled(True)
         self.cap.release()
 
     def start_capture_video(self):
@@ -193,7 +230,7 @@ class MainWindow(QMainWindow):
                 # self.out = cv2.VideoWriter('prediction.avi', cv2.VideoWriter_fourcc(
                 #     *'MJPG'), 20, (int(self.cap.get(3)), int(self.cap.get(4))))
                 self.timer_video.start(50)
-                self.uic.btnStart.setDisabled(True)
+                # self.uic.btnStart.setDisabled(True)
 
     # def show_webcam(self, frame):
     #     """Updates the image_label with a new opencv image"""
@@ -262,7 +299,7 @@ class MainWindow(QMainWindow):
                                         self.objs[j].lstcens.append(center)
                                         self.objs[j].vel = abs(pre_center - center)/(time_detected - pre_time)
                             else:
-                                obj = Objects(id, cat, center, time_detected)
+                                obj = Objects(id, int(cat), center, time_detected)
                                 obj.lstcens.append(center)
                                 self.objs.append(obj)
                                 self.current_id = id
@@ -272,6 +309,7 @@ class MainWindow(QMainWindow):
                                 if self.objs[j].id == id:
                                     # add obj in STACK
                                     self.STACK.put(self.objs[j])
+                                    self.addTo_lswStack(self.objs[j])
                                     # del obj in list object
                                 else:
                                     objs.append(self.objs[j])
@@ -402,7 +440,7 @@ class MainWindow(QMainWindow):
             self.cap.release()
             self.out.release()
             self.uic.lbScreen.clear()
-            self.uic.btnStart.setDisabled(False)
+            # self.uic.btnStart.setDisabled(False)
 
     def detect_and_track(self, img):
         bbox_xyxy = []
@@ -612,9 +650,6 @@ class MainWindow(QMainWindow):
             self.recdata = []
             print('rec all data:', data)
 
-            if self.scara.is_busy:
-                self.scara.set_busy(False)  # Robot completed working
-
             if data[0]==0:
                 print('Thuc hien thanh cong!')
                 self.scara.set_robot_running(True)   # Set robot is running
@@ -635,6 +670,13 @@ class MainWindow(QMainWindow):
                 print('Phan giai yeu cau that bai!')
             elif data[0]==2:
                 print('Thuc hien yeu cau that bai!')
+
+            if self.scara.is_busy:
+                self.scara.set_busy(False)  # Robot completed working
+                if data[0]==0:
+                    self.numof_picked[self.obj_picking.cls] += 1
+                    self.update_numof_picked()
+
 
     def fiveCharToValue(self, fchar):
         sign = 1 if fchar[0]== ord('+') else -1
@@ -696,21 +738,39 @@ class MainWindow(QMainWindow):
         self.scara.is_running = False
 
     #   Check and pick object
+    obj_picking = None
     def pickObjects_timer_tick(self):
         if self.scam.scam_completed and self.scara.is_running and self.scara.isRunning():
             if not self.STACK.empty() and not self.scara.is_busy:
                 obj = self.STACK.get()
+                self.uic.lsw_stack_obj.takeItem(0)
                 self.scara.set_busy(self.scara.pick_object(obj, self.ser[0]))
+                self.obj_picking = obj
 
+    def addTo_lswStack(self, obj):
+        item = QtWidgets.QListWidgetItem()
+        item.setText('ID:' + str(obj.id) + '        ' + str(self.dictCls[obj.cls]))
+        item.setIcon(self.clsIcon[obj.cls])
+        self.uic.lsw_stack_obj.addItem(item)
 
+    def update_numof_picked(self):
+        for i in range(8):
+            item = QtWidgets.QTableWidgetItem()
+            item.setText(str(self.numof_picked[i]))
+            self.uic.tb_clsObjs.setItem(1, i, item)
 
+    def test_lstwidget(self):
+        obj = Objects(id=1, cls=0, center=[10, 10], time=10)
+        self.addTo_lswStack(obj)
+        obj = Objects(id=2, cls=1, center=[10, 10], time=10)
+        self.addTo_lswStack(obj)
 
-
-    def test_lsv(self):
-        lst = ["aaaa", 'bbb', 'ccc']
-        listModel = QtCore.QStringListModel()
-        listModel.setStringList(lst)
-        self.uic.lsv_stack_object.setModel(listModel)
+    # def test_lsv(self):
+    #     lst = ["aaaa", 'bbb', 'ccc']
+    #     listModel = QtCore.QStringListModel()
+    #     listModel.setStringList(lst)
+    #     self.uic.lsv_stack_object.setModel(listModel)
+    #     self.uic.lsv_stack_object.
 
     def valueTolst(self, value):
         sign = '+' if value>=0 else '-'

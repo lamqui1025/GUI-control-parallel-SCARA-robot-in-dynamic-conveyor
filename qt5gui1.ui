@@ -196,32 +196,6 @@
      </layout>
     </widget>
    </widget>
-   <widget class="QPushButton" name="btnStart">
-    <property name="geometry">
-     <rect>
-      <x>880</x>
-      <y>590</y>
-      <width>91</width>
-      <height>41</height>
-     </rect>
-    </property>
-    <property name="text">
-     <string>ON</string>
-    </property>
-   </widget>
-   <widget class="QPushButton" name="btnStop">
-    <property name="geometry">
-     <rect>
-      <x>970</x>
-      <y>590</y>
-      <width>91</width>
-      <height>41</height>
-     </rect>
-    </property>
-    <property name="text">
-     <string>OFF</string>
-    </property>
-   </widget>
    <widget class="QGroupBox" name="groupBox_2">
     <property name="geometry">
      <rect>
@@ -446,6 +420,12 @@
        <height>41</height>
       </rect>
      </property>
+     <property name="font">
+      <font>
+       <weight>75</weight>
+       <bold>true</bold>
+      </font>
+     </property>
      <property name="text">
       <string>Stop</string>
      </property>
@@ -459,6 +439,12 @@
        <height>41</height>
       </rect>
      </property>
+     <property name="font">
+      <font>
+       <weight>75</weight>
+       <bold>true</bold>
+      </font>
+     </property>
      <property name="text">
       <string>Start</string>
      </property>
@@ -471,6 +457,12 @@
        <width>161</width>
        <height>41</height>
       </rect>
+     </property>
+     <property name="font">
+      <font>
+       <weight>75</weight>
+       <bold>true</bold>
+      </font>
      </property>
      <property name="text">
       <string>Reset robot</string>
@@ -512,26 +504,6 @@
       <string>respond</string>
      </property>
     </widget>
-   </widget>
-   <widget class="QTableView" name="tableView">
-    <property name="geometry">
-     <rect>
-      <x>220</x>
-      <y>590</y>
-      <width>651</width>
-      <height>41</height>
-     </rect>
-    </property>
-   </widget>
-   <widget class="QTableView" name="tableView_2">
-    <property name="geometry">
-     <rect>
-      <x>220</x>
-      <y>640</y>
-      <width>841</width>
-      <height>81</height>
-     </rect>
-    </property>
    </widget>
    <widget class="QGroupBox" name="groupBox_4">
     <property name="geometry">
@@ -652,21 +624,11 @@
      </property>
     </widget>
    </widget>
-   <widget class="QListView" name="lsv_stack_object">
-    <property name="geometry">
-     <rect>
-      <x>900</x>
-      <y>10</y>
-      <width>201</width>
-      <height>411</height>
-     </rect>
-    </property>
-   </widget>
    <widget class="QPushButton" name="btnTest_robot">
     <property name="geometry">
      <rect>
       <x>240</x>
-      <y>510</y>
+      <y>660</y>
       <width>101</width>
       <height>51</height>
      </rect>
@@ -678,11 +640,17 @@
    <widget class="QPushButton" name="btnScaleCam">
     <property name="geometry">
      <rect>
-      <x>880</x>
+      <x>890</x>
       <y>450</y>
-      <width>81</width>
+      <width>101</width>
       <height>41</height>
      </rect>
+    </property>
+    <property name="font">
+     <font>
+      <weight>75</weight>
+      <bold>true</bold>
+     </font>
     </property>
     <property name="text">
      <string>Scale</string>
@@ -691,14 +659,40 @@
    <widget class="QPushButton" name="btnYolo_work">
     <property name="geometry">
      <rect>
-      <x>960</x>
+      <x>990</x>
       <y>450</y>
-      <width>81</width>
+      <width>111</width>
       <height>41</height>
      </rect>
     </property>
+    <property name="font">
+     <font>
+      <weight>75</weight>
+      <bold>true</bold>
+     </font>
+    </property>
     <property name="text">
      <string>START</string>
+    </property>
+   </widget>
+   <widget class="QTableWidget" name="tb_clsObjs">
+    <property name="geometry">
+     <rect>
+      <x>230</x>
+      <y>500</y>
+      <width>871</width>
+      <height>151</height>
+     </rect>
+    </property>
+   </widget>
+   <widget class="QListWidget" name="lsw_stack_obj">
+    <property name="geometry">
+     <rect>
+      <x>890</x>
+      <y>10</y>
+      <width>211</width>
+      <height>431</height>
+     </rect>
     </property>
    </widget>
   </widget>
