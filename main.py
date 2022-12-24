@@ -153,8 +153,8 @@ class MainWindow(QMainWindow):
         # Timer To PICK object
         self.timer_pick_object = QtCore.QTimer()
         self.timer_pick_object.timeout.connect(self.pickObjects_timer_tick)
-        self.timer_pick_object.start(30)
-
+        self.timer_pick_object.start(20)
+        # Create 2 Seirial
         self.ser = {}
         self.ser[0] = serialThread()
         self.ser[1] = serialThread()
@@ -164,7 +164,8 @@ class MainWindow(QMainWindow):
             self.uic.cbPort_conveyor.addItem(port)
         self.ser[0].message.connect(self.Received_robot)
         self.ser[1].message.connect(self.Received_conveyor)
-
+        # Emit from Scara
+        # self.scara.respond.connect(self.scara_respond)
         ##  INITIALIZE mainWindow
         self.initialize_mainWindow()
 
@@ -177,7 +178,7 @@ class MainWindow(QMainWindow):
         self.uic.tb_clsObjs.setRowCount(2)
 
         self.uic.tb_clsObjs.setRowHeight(0, 80)
-        print(self.uic.tb_clsObjs.width())
+        # print(self.uic.tb_clsObjs.width())
         for i in range(8):
             self.uic.tb_clsObjs.setColumnWidth(i, int(round(self.uic.tb_clsObjs.width()/8.5)))
             lb_cls = QtWidgets.QLabel()
@@ -277,7 +278,7 @@ class MainWindow(QMainWindow):
                         bbox_xyxy = bboxs[i]
                         id = identities[i]
                         cat = categories[i]
-                        print(bbox_xyxy, id, cat)
+                        # print(bbox_xyxy, id, cat)
                         center = (bbox_xyxy[0:2] + bbox_xyxy[2:4])/2
                         # dH = self.scam.distance_line(center, self.pH)
                         # dW = self.scam.distance_line(center, self.pW)
@@ -320,7 +321,7 @@ class MainWindow(QMainWindow):
             elif self.is_scaleCam:
                 frame, P1, P2, self.pH, self.pW = self.scam.scaleCam(frame)
                 self.scara.set_pH_pW(pH=self.pH, pW=self.pW)
-                print(P1, P2, self.pH, self.pW)
+                print('Scale Camera:', P1, P2, self.pH, self.pW)
                 if self.scam.scam_completed:
                     dis12 = self.scam.distance(P1[0], P1[1], P2[0], P2[1])
                     self.pp1cm = dis12/12
@@ -630,7 +631,7 @@ class MainWindow(QMainWindow):
                 self.scara.terminate()
 
     recdata=[]
-    f_rec= False
+    f_rec = False
     r_completed = False
     def Received_robot(self, buff):
         print('rec robot=', buff)
@@ -648,7 +649,7 @@ class MainWindow(QMainWindow):
             self.r_completed = False
             data = self.recdata
             self.recdata = []
-            print('rec all data:', data)
+            # print('rec all data:', data)
 
             if data[0]==0:
                 print('Thuc hien thanh cong!')
@@ -676,7 +677,9 @@ class MainWindow(QMainWindow):
                 if data[0]==0:
                     self.numof_picked[self.obj_picking.cls] += 1
                     self.update_numof_picked()
-
+                elif data[0]==1 or data[0]==2:
+                    self.obj_missed += 1
+                    self.uic.lb_numof_missed.setText(str(self.obj_missed))
 
     def fiveCharToValue(self, fchar):
         sign = 1 if fchar[0]== ord('+') else -1
@@ -699,7 +702,7 @@ class MainWindow(QMainWindow):
                     vel = int(self.pulse * 3600 / 4 / 11 / 56)   # độ trên giây
                     print(vel, 'dec/s')
                     self.velcon = vel
-                    self.scara.set_velcon_dps(vel)
+                    # self.scara.set_velcon_dps(vel)
                     self.uic.lb_realVel.setText(str(vel))
                     self.count = 0
                     self.pulse = 0
@@ -711,6 +714,7 @@ class MainWindow(QMainWindow):
         self.count = 0
         self.pulse = 0
         speed = self.uic.spinBox_Vel.value()
+        self.scara.set_velcon_dps(speed)
         sp0 = speed %256
         sp1 = speed //256
 
@@ -725,6 +729,7 @@ class MainWindow(QMainWindow):
         self.count = 0
         self.pulse = 0
         self.uic.lb_realVel.setText('0')
+        self.scara.set_velcon_dps(0)
 
     def btnReset_robot_clicked(self):
         RESET = [0x02, 0x32, 0x03]  # 0x02 '2' 0x03
@@ -739,13 +744,30 @@ class MainWindow(QMainWindow):
 
     #   Check and pick object
     obj_picking = None
+    obj_missed = 0
+    sendBuff = None
+    is_sending_robot = False
+    timeToSend = 0
     def pickObjects_timer_tick(self):
         if self.scam.scam_completed and self.scara.is_running and self.scara.isRunning():
-            if not self.STACK.empty() and not self.scara.is_busy:
-                obj = self.STACK.get()
-                self.uic.lsw_stack_obj.takeItem(0)
-                self.scara.set_busy(self.scara.pick_object(obj, self.ser[0]))
-                self.obj_picking = obj
+            if self.is_sending_robot:
+                if time_synchronized() >= self.timeToSend:
+                    if self.sendBuff is not None:
+                        if self.ser[0].sendSerial(bytes(self.sendBuff)) != -1:
+                            self.scara.set_busy(True)
+                        self.is_sending_robot = False
+            else:
+                if not self.STACK.empty() and not self.scara.is_busy:
+                    obj = self.STACK.get()
+                    self.uic.lsw_stack_obj.takeItem(0)
+                    self.obj_picking = obj
+                    self.is_sending_robot = self.scara.pick_object(obj, self.ser[0])
+                    if self.is_sending_robot:
+                        self.sendBuff = self.scara.get_sendBuff()
+                        self.timeToSend = self.scara.get_timeToSend()
+                    else:
+                        self.obj_missed += 1
+                        self.uic.lb_numof_missed.setText(str(self.obj_missed))
 
     def addTo_lswStack(self, obj):
         item = QtWidgets.QListWidgetItem()
@@ -759,11 +781,20 @@ class MainWindow(QMainWindow):
             item.setText(str(self.numof_picked[i]))
             self.uic.tb_clsObjs.setItem(1, i, item)
 
+
+
+
+
+
     def test_lstwidget(self):
         obj = Objects(id=1, cls=0, center=[10, 10], time=10)
         self.addTo_lswStack(obj)
         obj = Objects(id=2, cls=1, center=[10, 10], time=10)
         self.addTo_lswStack(obj)
+
+        item = self.uic.lsw_stack_obj.item(0)
+        item.setText('Edited!')
+
 
     # def test_lsv(self):
     #     lst = ["aaaa", 'bbb', 'ccc']
@@ -772,16 +803,16 @@ class MainWindow(QMainWindow):
     #     self.uic.lsv_stack_object.setModel(listModel)
     #     self.uic.lsv_stack_object.
 
-    def valueTolst(self, value):
-        sign = '+' if value>=0 else '-'
-        val = abs(int(value*10))
-        sval = ''
-        for i in range(4):
-            sval = str(val%10) + sval
-            val = val//10
-        sval = sign + sval
-        lstValue = [ord(c) for c in sval]
-        return lstValue
+    # def valueTolst(self, value):
+    #     sign = '+' if value>=0 else '-'
+    #     val = abs(int(value*10))
+    #     sval = ''
+    #     for i in range(4):
+    #         sval = str(val%10) + sval
+    #         val = val//10
+    #     sval = sign + sval
+    #     lstValue = [ord(c) for c in sval]
+    #     return lstValue
 
     def btnTest_robot_clicked(self):
         neg = 0x2D

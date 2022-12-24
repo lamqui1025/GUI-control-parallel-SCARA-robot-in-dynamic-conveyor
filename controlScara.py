@@ -8,22 +8,23 @@ from utils.torch_utils import time_synchronized
 from sklearn import datasets, linear_model
 
 class Scara(QThread):
-    dictDes = {0: [200, 150], 1: [200, 150],
-               2: [100, 150], 3: [100, 150],
-               4: [0, 150], 5: [-100, 150],
-               6: [-200, 150], 7: [-200, 150]}
+    dictDes = {0: [190, 70], 1: [190, 150],
+               2: [125, 150], 3: [65, 150],
+               4: [5, 150], 5: [-55, 150],
+               6: [-115, 150], 7: [-180, 150]}
 
     #Flag Status of paralell SCARA
     is_running = False
     is_busy = False
+    is_sending = False
 
-    dx_con = -288  # 288 mm
-    dy_con = 210  # 205 mm
+    dx_con = -290  # 290 mm # hoat dong on voi -300 mm
+    dy_con = 207  # 205 mm
     pp1cm = None
     pH = None
     pW = None
-    velcon_dps = 0  # độ trên giây
-    D_conveyor = 25 # đường kính 25mm
+    velcon_dps = 0   # độ trên giây
+    D_conveyor = 25  # đường kính 25mm
 
     #   significant parallel Scara robot
     _longLink = 225  # mm
@@ -35,15 +36,22 @@ class Scara(QThread):
     _realX = 0
     _realY = 0
 
-    _microStep =  32  #step of stepper motor
+    _microStep = 32  #step of stepper motor
     _degPerStep = 1.8/_microStep
     _stepPerDeg = _microStep/1.8
     _vmax = 1080 #deg/second
     _amax = 3*_vmax #deg/second^2
 
-    vMax = 17   # %
-    aMax = 12   # %
+    vMaxp = 17  # %
+    aMaxp = 12  # %
 
+    vMax = vMaxp * _vmax/100  # %
+    aMax = aMaxp * _amax/100  # %
+
+    timeToSend = 0
+    sendBuff = None
+
+    # respond = pyqtSignal(bool)
     def __init__(self, parent=None):
         super(Scara, self).__init__(parent)
         self.start()
@@ -53,6 +61,14 @@ class Scara(QThread):
 
     def set_busy(self, busy):
         self.is_busy = busy
+
+    def set_sending(self, sending):
+        self.is_sending = sending
+
+    def get_sendBuff(self):
+        return self.sendBuff
+    def get_timeToSend(self):
+        return self.timeToSend
 
     def set_pH_pW(self, pH=None, pW=None):
         self.pH = pH
@@ -136,13 +152,12 @@ class Scara(QThread):
         vmax4 = self.calVmax(s4, amax, vmax)
         tf1 = max(abs(s1 / vmax1) + vmax1 / amax, abs(s4 / vmax4) + vmax4 / amax)
         #   tf to pointB
-        thetaB = self.pointToAngle1(pointB[0], pointB[1])
-        s1 = thetaB[0] - thetaA[0]
-        s4 = thetaB[1] - thetaA[1]
-        vmax1 = self.calVmax(s1, amax, vmax)
-        vmax4 = self.calVmax(s4, amax, vmax)
-        tf2 = max(abs(s1 / vmax1) + vmax1 / amax, abs(s4 / vmax4) + vmax4 / amax)
-
+        # thetaB = self.pointToAngle1(pointB[0], pointB[1])
+        # s1 = thetaB[0] - thetaA[0]
+        # s4 = thetaB[1] - thetaA[1]
+        # vmax1 = self.calVmax(s1, amax, vmax)
+        # vmax4 = self.calVmax(s4, amax, vmax)
+        # tf2 = max(abs(s1 / vmax1) + vmax1 / amax, abs(s4 / vmax4) + vmax4 / amax)
         return tf1
 
     def pick_object(self, obj, ser):
@@ -170,7 +185,7 @@ class Scara(QThread):
         regr.fit(Xbar, y)
 
         W = regr.coef_[0]  #   W of line to predict object
-        print('W=', W)
+        # print('W=', W)
 
         # velocity of conveyor
         mmps_con = self.velcon_dps*(math.pi*self.D_conveyor)/360    # mm/s
@@ -184,21 +199,32 @@ class Scara(QThread):
         dy = round(dW * 10 / self.pp1cm + self.dy_con, 3)   # mm
 
         at_predtime = time_synchronized()
-        pred_dx = dx + (at_predtime - time_exist)*mmps_con #  du doan vi tri hien tai cua vat the
+        pred_dx = dx + (at_predtime - time_exist)*mmps_con  # du doan vi tri hien tai cua vat the
+        pred_dy = pred_dx*W[1] + W[0]
+        tf_pred = self.cal_tf([pred_dx, pred_dy], des_of_cls, self.vMax, self.aMax) * 1.2 + 0.1  # them du sai so 25%
 
-        pick_dx = pred_dx + 45  # Gap vat truoc du doan 50mm
-        if pick_dx > 125:
+        x_delay = mmps_con * tf_pred    # mm
+        print('x_delay=', x_delay)
+        pick_dx = pred_dx + x_delay  # Gap vat truoc du doan 50mm
+        if pick_dx > 180 - x_delay:
             print('Fail To PICK this Object!')
+            self.is_sending = False
             return False
 
-        pick_dy = pick_dx*W[1]+W[0]
+        pick_dy = pick_dx*W[1] + W[0]
         tf = self.cal_tf([pick_dx, pick_dy], des_of_cls, self.vMax, self.aMax)
+        tf = tf if tf*1000 >= 60 else 40/1000   # New thoi gian qua ngan thi dung rawMoveToPoint() voi tong 60ms
+        tf += 20/1000 + 200/1000 + 0.03  # Cong them 1 chu ki bu sau cap xung cho 2 dong co
         print('tf=', tf)
 
         # caculate time to pick_destination
         s = pick_dx - dx
         time_to_pick = s / mmps_con + time_exist
         time_to_send = time_to_pick - tf
+        # print('time to Pick:', time_to_pick)
+        # print('time to Send:', time_to_send)
+        # print('time_synchronized:', time_synchronized())
+        # print('PICK:', pick_dx, pick_dy)
 
         #   Prepare Buffer to Send
         STX = [0x02]
@@ -207,19 +233,15 @@ class Scara(QThread):
         pointAy = self.valueTolst(pick_dy)
         pointBx = self.valueTolst(des_of_cls[0])
         pointBy = self.valueTolst(des_of_cls[1])
-        VEL = [self.vMax//10 + ord('0'), self.vMax % 10 + ord('0')]    # %
-        ACC = [self.aMax//10 + ord('0'), self.aMax % 10 + ord('0')]    # %
+        VEL = [self.vMaxp//10 + ord('0'), self.vMaxp % 10 + ord('0')]    # %
+        ACC = [self.aMaxp//10 + ord('0'), self.aMaxp % 10 + ord('0')]    # %
         ETX = [0x03]
 
-        sendBuff = STX + CMD + pointAx + pointAy + pointBx + pointBy + VEL + ACC + ETX
+        self.sendBuff = STX + CMD + pointAx + pointAy + pointBx + pointBy + VEL + ACC + ETX
         #   Waiting to SEND
-        while time_synchronized() >= time_to_send:
-            if ser.sendSerial(bytes(sendBuff)) != -1:
-                print('SEND sucessful!')
-                return True
-            else:
-                print('Fail to SEND!')
-                return False
+        self.is_sending = True
+        self.timeToSend = time_to_send
+        return True
 
 
 
