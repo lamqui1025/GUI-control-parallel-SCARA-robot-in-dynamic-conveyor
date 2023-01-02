@@ -8,22 +8,21 @@ from utils.torch_utils import time_synchronized
 from sklearn import datasets, linear_model
 
 class Scara(QThread):
-    dictDes = {0: [190, 70], 1: [190, 150],
-               2: [125, 150], 3: [65, 150],
-               4: [5, 150], 5: [-55, 150],
-               6: [-115, 150], 7: [-180, 150]}
+    dictDes = {0: [195, 70], 1: [195, 150],
+               2: [135, 150], 3: [75, 150],
+               4: [15, 150], 5: [-45, 150],
+               6: [-105, 150], 7: [-165, 150]}
 
     #Flag Status of paralell SCARA
     is_running = False
     is_busy = False
-    is_sending = False
 
-    dx_con = -290  # 290 mm # hoat dong on voi -300 mm
-    dy_con = 207  # 205 mm
+    dx_con = -285  # 290 mm # hoat dong on voi -300 mm
+    dy_con = 210  # 205 mm
     pp1cm = None
     pH = None
     pW = None
-    velcon_dps = 0   # độ trên giây
+    velcon_mmps = 0   # mm/s
     D_conveyor = 25  # đường kính 25mm
 
     #   significant parallel Scara robot
@@ -42,11 +41,11 @@ class Scara(QThread):
     _vmax = 1080 #deg/second
     _amax = 3*_vmax #deg/second^2
 
-    vMaxp = 17  # %
-    aMaxp = 12  # %
+    vMaxp = 30  # %
+    aMaxp = 27  # %
 
-    vMax = vMaxp * _vmax/100  # %
-    aMax = aMaxp * _amax/100  # %
+    vMax = vMaxp * _vmax/100  # deg/second
+    aMax = aMaxp * _amax/100  # deg/second
 
     timeToSend = 0
     sendBuff = None
@@ -77,8 +76,8 @@ class Scara(QThread):
     def set_pp1cm(self, pp1cm):
         self.pp1cm = pp1cm
 
-    def set_velcon_dps(self, vel_dps):
-        self.velcon_dps = vel_dps
+    def set_velcon_mmps(self, vel_mmps):
+        self.velcon_mmps = vel_mmps
 
     def set_realPul1(self, realPul1):
         self._realPul1 = realPul1
@@ -90,6 +89,14 @@ class Scara(QThread):
         [x, y] = point
         [a, b] = line
         return abs(a*x - y + b)/np.sqrt(1+a**2)
+
+    def set_vMaxp(self, vmaxp):
+        self.vMaxp = vmaxp
+        self.vMax = vmaxp * self._vmax / 100
+
+    def set_aMaxp(self, amaxp):
+        self.aMaxp = amaxp
+        self.aMax = amaxp * self._amax / 100
 
     def valueTolst(self, value):
         sign = '+' if value>=0 else '-'
@@ -168,12 +175,6 @@ class Scara(QThread):
         vel = obj.vel   # mm/s
         lstcens = obj.lstcens
 
-        # dH = self.distance_line(center, self.pH)
-        # dW = self.distance_line(center, self.pW)
-
-        # dx = round(dH*10/self.pp1cm + self.dx_con, 3)
-        # dy = round(dW*10/self.pp1cm + self.dy_con, 3)
-
         #   LINEAR REGRESSION
         XYs = np.array(self.pixelToXy(lstcens))
         centers = np.array(lstcens)
@@ -201,8 +202,12 @@ class Scara(QThread):
         at_predtime = time_synchronized()
         pred_dx = dx + (at_predtime - time_exist)*mmps_con  # du doan vi tri hien tai cua vat the
         pred_dy = pred_dx*W[1] + W[0]
+        # print('pred_dx=',  pred_dx, '----pred_dy=', pred_dy)
         tf_pred = self.cal_tf([pred_dx, pred_dy], des_of_cls, self.vMax, self.aMax) * 1.2 + 0.1  # them du sai so 25%
-
+        if tf_pred is None:
+            print('Fail to cal tf_pre')
+            return False
+        print('tf_pred=', tf_pred)
         x_delay = mmps_con * tf_pred    # mm
         print('x_delay=', x_delay)
         pick_dx = pred_dx + x_delay  # Gap vat truoc du doan 50mm

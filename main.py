@@ -27,9 +27,10 @@ import cv2
 import numpy as np
 import random
 import queue
+import math
 
 class Objects:
-    def __init__(self, id, cls,center, time):
+    def __init__(self, id, cls, center, time):
         self.id = id
         self.cls = cls
         self.center = center
@@ -42,7 +43,7 @@ class ModelYolov7:
     device = ''
     weights = 'best-1.pt'
     image_size = 640
-    conf_thres = 0.75
+    conf_thres = 0.85
     iou_thres = 0.45
     view_img = False
     save_txt = False
@@ -140,9 +141,11 @@ class MainWindow(QMainWindow):
         self.uic.btnReset_robot.clicked.connect(self.btnReset_robot_clicked)
         self.uic.btnStart_robot.clicked.connect(self.btnStart_robot_clicked)
         self.uic.btnStop_robot.clicked.connect(self.btnStop_robot_clicked)
-        self.uic.btnTest_robot.clicked.connect(self.btnTest_robot_clicked)
+        # self.uic.btnTest_robot.clicked.connect(self.btnTest_robot_clicked)
         self.uic.btnScaleCam.clicked.connect(self.btnScaleCam_clicked)
         self.uic.btnYolo_work.clicked.connect(self.btnYolo_clicked)
+        self.uic.spinBox_vmax.valueChanged.connect(self.update_vmaxp)
+        self.uic.spinBox_amax.valueChanged.connect(self.update_amaxp)
 
         self.timer_video.timeout.connect(self.show_video_frame)
 
@@ -173,6 +176,15 @@ class MainWindow(QMainWindow):
         self.start_capture_video()
         self.clsIcon = self.loadIcons()
 
+        # update value in SpinBox vmaxp, amaxp (%) and vmax, amax (deg/s)
+        self.uic.spinBox_vmax.setValue(self.scara.vMaxp)
+        self.uic.spinBox_amax.setValue(self.scara.aMaxp)
+
+        vmax = round(self.scara.vMax, 3)  # deg/s
+        amax = round(self.scara.aMax, 3)  # deg/s
+        self.uic.lb_vmax.setText(str(vmax))
+        self.uic.lb_amax.setText(str(amax))
+
         # INIT TABLE WIDGETS
         self.uic.tb_clsObjs.setColumnCount(8)
         self.uic.tb_clsObjs.setRowCount(2)
@@ -189,16 +201,14 @@ class MainWindow(QMainWindow):
             # imgcls = cv2.resize(imgcls, (80, 80))
             # showimg = QtGui.QImage(imgcls, imgcls.shape[1], imgcls.shape[0],
             #                          QtGui.QImage.Format_RGB888)
-
             # showImage = showImage.scaled(700, 550, Qt.KeepAspectRatio)
-
             # lb_cls.setPixmap(QtGui.QPixmap.fromImage(showimg))
+
             pixmap = QtGui.QPixmap('clsImg/' + self.dictCls[i] + '.png')
             pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatio)
             lb_cls.setPixmap(pixmap)
             lb_cls.resize(80, 80)
             self.uic.tb_clsObjs.setCellWidget(0, i, lb_cls)
-            # self.uic.tb_clsObjs.
 
         self.update_numof_picked()
         # self.test_lstwidget()
@@ -208,9 +218,33 @@ class MainWindow(QMainWindow):
         for i in range(8):
             Icons.append(QtGui.QIcon('clsImg/' + self.dictCls[i] + '.png'))
         return Icons
+    def update_vmaxp(self):
+        vmaxp = self.uic.spinBox_vmax.value()
+        self.scara.set_vMaxp(vmaxp)
+        vmax = round(self.scara.vMax, 3)
+        self.uic.lb_vmax.setText(str(vmax))
+    def update_amaxp(self):
+        amaxp = self.uic.spinBox_amax.value()
+        self.scara.set_aMaxp(amaxp)
+        amax = round(self.scara.aMax, 3)
+        self.uic.lb_amax.setText(str(amax))
+
+    # def keyPressEvent(self, event):
+    #     if event.key() == Qt.Key.Key_Return:
+    #         print('Press Enter!')
+    #         # self.uic.spinBox_Vel.addAction()
+    #         self.btnRun_conveyor_clicked()
 
     def closeEvent(self, event):
         self.stop_capture_video()
+
+        self.timer_pick_object.stop()
+        self.timer.stop()
+        self.timer_video.stop()
+
+        self.scara.terminate()
+        self.ser[0].terminate()
+        self.ser[1].terminate()
 
     def stop_capture_video(self):
         self.timer_video.stop()
@@ -271,8 +305,8 @@ class MainWindow(QMainWindow):
         if img is not None:
             frame = img
             if self.on_yolo:
-                frame, bboxs, identities, categories = self.detect_and_track(frame)
                 time_detected = time_synchronized()
+                frame, bboxs, identities, categories = self.detect_and_track(frame)
                 if self.scam.scam_completed:
                     for i in range(len(identities)-1, -1, -1):
                         bbox_xyxy = bboxs[i]
@@ -673,13 +707,13 @@ class MainWindow(QMainWindow):
                 print('Thuc hien yeu cau that bai!')
 
             if self.scara.is_busy:
-                self.scara.set_busy(False)  # Robot completed working
                 if data[0]==0:
                     self.numof_picked[self.obj_picking.cls] += 1
                     self.update_numof_picked()
                 elif data[0]==1 or data[0]==2:
                     self.obj_missed += 1
                     self.uic.lb_numof_missed.setText(str(self.obj_missed))
+                self.scara.set_busy(False)  # Robot completed working
 
     def fiveCharToValue(self, fchar):
         sign = 1 if fchar[0]== ord('+') else -1
@@ -687,6 +721,11 @@ class MainWindow(QMainWindow):
         for i in range(1, 5):
             value += (fchar[i] - ord('0')) * 10**(4-i)
         return sign*value
+
+    def degToMmps(self, degps):
+        return degps * 25 * np.pi / 360
+    def mmToDegps(self, mmps):
+        return mmps * 360 / (25 * np.pi)
 
     def Received_conveyor(self, buff):
         # print('buff=', buff)
@@ -699,11 +738,12 @@ class MainWindow(QMainWindow):
                 self.pulse += data[6]*256 + data[7]
                 # print('pulse=', pulse)
                 if self.count==10:
-                    vel = int(self.pulse * 3600 / 4 / 11 / 56)   # độ trên giây
-                    print(vel, 'dec/s')
+                    vel = self.pulse * 10 * 25 * np.pi / 4 / 11 / 56   # độ trên giây
+                    print(vel, 'mm/s')
+                    rvel = round(vel, 3)
                     self.velcon = vel
-                    # self.scara.set_velcon_dps(vel)
-                    self.uic.lb_realVel.setText(str(vel))
+                    # self.scara.set_velcon_mmps(vel)
+                    self.uic.lb_realVel.setText(str(rvel))
                     self.count = 0
                     self.pulse = 0
 
@@ -713,10 +753,14 @@ class MainWindow(QMainWindow):
         direct = 0x46   #F (FORWARD)
         self.count = 0
         self.pulse = 0
-        speed = self.uic.spinBox_Vel.value()
-        self.scara.set_velcon_dps(speed)
-        sp0 = speed %256
-        sp1 = speed //256
+        mmps = self.uic.spinBox_Vel.value()
+
+        degps = int(round(self.mmToDegps(mmps)))    # deg/s
+        mmpsx = self.degToMmps(degps)   # mm/s
+        self.scara.set_velcon_mmps(mmpsx)   # mm/s
+
+        sp0 = degps % 256
+        sp1 = degps // 256
 
         runSpeed = [0x02, 0x53, 0x52, 0x55, 0x4E, 0x00, 0x00, 0x00,
                     0x00, 0x00, 0x00, 0x00, 0x00, direct, sp1, sp0, 0x16, 0x03]
@@ -729,7 +773,7 @@ class MainWindow(QMainWindow):
         self.count = 0
         self.pulse = 0
         self.uic.lb_realVel.setText('0')
-        self.scara.set_velcon_dps(0)
+        self.scara.set_velcon_mmps(0)
 
     def btnReset_robot_clicked(self):
         RESET = [0x02, 0x32, 0x03]  # 0x02 '2' 0x03
@@ -779,6 +823,9 @@ class MainWindow(QMainWindow):
         for i in range(8):
             item = QtWidgets.QTableWidgetItem()
             item.setText(str(self.numof_picked[i]))
+            font = QtGui.QFont()
+            font.setBold(True)
+            item.setFont(font)
             self.uic.tb_clsObjs.setItem(1, i, item)
 
 
