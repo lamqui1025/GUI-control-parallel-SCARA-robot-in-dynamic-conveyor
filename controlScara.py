@@ -189,7 +189,7 @@ class Scara(QThread):
         # print('W=', W)
 
         # velocity of conveyor
-        mmps_con = self.velcon_dps*(math.pi*self.D_conveyor)/360    # mm/s
+        mmps_con = self.velcon_mmps   # mm/s
 
         des_of_cls = self.dictDes[cls]     # destination for cls of object
 

@@ -37,13 +37,15 @@ class Objects:
         self.time = time
         self.lstcens = []
         self.vel = None
+        self.cnt_mistake = 0
+        self.in_cats = True
 
 class ModelYolov7:
     source = 1
     device = ''
     weights = 'best-1.pt'
     image_size = 640
-    conf_thres = 0.85
+    conf_thres = 0.75
     iou_thres = 0.45
     view_img = False
     save_txt = False
@@ -120,7 +122,8 @@ class MainWindow(QMainWindow):
     current_id = 0
     STACK = queue.Queue()
     objs = []
-    numof_picked = [0, 0, 0, 0 ,0 ,0 ,0 ,0]
+    non_in_cats = 0
+    numof_picked = [0, 0, 0, 0, 0, 0, 0, 0]
     def __init__(self):
         # self.main_win = QMainWindow()
         super().__init__()
@@ -141,6 +144,7 @@ class MainWindow(QMainWindow):
         self.uic.btnReset_robot.clicked.connect(self.btnReset_robot_clicked)
         self.uic.btnStart_robot.clicked.connect(self.btnStart_robot_clicked)
         self.uic.btnStop_robot.clicked.connect(self.btnStop_robot_clicked)
+        self.uic.btnReady_robot.clicked.connect(self.btnReady_robot_clicked)
         # self.uic.btnTest_robot.clicked.connect(self.btnTest_robot_clicked)
         self.uic.btnScaleCam.clicked.connect(self.btnScaleCam_clicked)
         self.uic.btnYolo_work.clicked.connect(self.btnYolo_clicked)
@@ -194,15 +198,6 @@ class MainWindow(QMainWindow):
         for i in range(8):
             self.uic.tb_clsObjs.setColumnWidth(i, int(round(self.uic.tb_clsObjs.width()/8.5)))
             lb_cls = QtWidgets.QLabel()
-
-            # imgcls = cv2.imread('clsImg/' + self.dictCls[i] + '.png')
-            # # cv2.imshow(str(i), imgcls)
-            # imgcls = cv2.cvtColor(imgcls, cv2.COLOR_BGR2RGB)
-            # imgcls = cv2.resize(imgcls, (80, 80))
-            # showimg = QtGui.QImage(imgcls, imgcls.shape[1], imgcls.shape[0],
-            #                          QtGui.QImage.Format_RGB888)
-            # showImage = showImage.scaled(700, 550, Qt.KeepAspectRatio)
-            # lb_cls.setPixmap(QtGui.QPixmap.fromImage(showimg))
 
             pixmap = QtGui.QPixmap('clsImg/' + self.dictCls[i] + '.png')
             pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatio)
@@ -311,7 +306,7 @@ class MainWindow(QMainWindow):
                     for i in range(len(identities)-1, -1, -1):
                         bbox_xyxy = bboxs[i]
                         id = identities[i]
-                        cat = categories[i]
+                        cat = int(categories[i])
                         # print(bbox_xyxy, id, cat)
                         center = (bbox_xyxy[0:2] + bbox_xyxy[2:4])/2
                         # dH = self.scam.distance_line(center, self.pH)
@@ -323,47 +318,82 @@ class MainWindow(QMainWindow):
                         # if id > self.current_id:
                         #     self.current_id = id
                         #     # self.STACK.put(obj)
-                        if center[0]>80 and center[0]<560:
+                        lim_top = self.P1[1] + self.pp1cm*1.1
+                        lim_bot = self.P2[1] - self.pp1cm*1.1
+                        if center[0]>100 and center[0]<560 and center[1]>lim_top and center[1]<lim_bot:
                             if id <= self.current_id:
                                 for j in range(len(self.objs)):
-                                    if self.objs[j].id == id:
+                                    if self.objs[j].id == id and self.objs[j].cls == cat:
                                         pre_center = self.objs[j].center
                                         pre_time = self.objs[j].time
                                         self.objs[j].center = center
                                         self.objs[j].time = time_detected
                                         self.objs[j].lstcens.append(center)
                                         self.objs[j].vel = abs(pre_center - center)/(time_detected - pre_time)
+                                    elif self.objs[j].id == id and self.objs[j].cls != cat:
+                                        pre_center = self.objs[j].center
+                                        pre_time = self.objs[j].time
+                                        self.objs[j].center = center
+                                        self.objs[j].time = time_detected
+                                        self.objs[j].lstcens.append(center)
+                                        self.objs[j].vel = abs(pre_center - center) / (time_detected - pre_time)
+
+                                        self.objs[j].cnt_mistake += 1
+                                        if self.objs[j].cnt_mistake > 1:
+                                            self.objs[j].in_cats = False
+                                            c1, c2 = (int(bbox_xyxy[0]), int(bbox_xyxy[1])), (int(bbox_xyxy[2]), int(bbox_xyxy[3]))
+                                            cv2.rectangle(img, c1, c2, (255, 255, 255), thickness=2,
+                                                          lineType=cv2.LINE_AA)
                             else:
-                                obj = Objects(id, int(cat), center, time_detected)
-                                obj.lstcens.append(center)
-                                self.objs.append(obj)
-                                self.current_id = id
-                        elif center[0]<=80:
+                                if center[0] > 400:
+                                    obj = Objects(id, cat, center, time_detected)
+                                    obj.lstcens.append(center)
+                                    self.objs.append(obj)
+                                    self.current_id = id
+                                else:
+                                    c1, c2 = (int(bbox_xyxy[0]), int(bbox_xyxy[1])), (int(bbox_xyxy[2]), int(bbox_xyxy[3]))
+                                    cv2.rectangle(img, c1, c2, (255,255,255), thickness=2, lineType=cv2.LINE_AA)
+                        elif center[0]<=100 and center[1]>lim_top and center[1]<lim_bot:
                             objs = []
                             for j in range(len(self.objs)):
                                 if self.objs[j].id == id:
-                                    # add obj in STACK
-                                    self.STACK.put(self.objs[j])
-                                    self.addTo_lswStack(self.objs[j])
-                                    # del obj in list object
+                                    if self.objs[j].in_cats:
+                                        if self.objs[j].cls == cat:
+                                            # add obj in STACK
+                                            self.STACK.put(self.objs[j])
+                                            self.addTo_lswStack(self.objs[j])
+                                            # del obj in list object
+                                        else:
+                                            self.non_in_cats += 1
+                                    else:
+                                        self.non_in_cats += 1
                                 else:
                                     objs.append(self.objs[j])
                             self.objs = objs
-
-
 
             elif self.is_scaleCam:
                 frame, P1, P2, self.pH, self.pW = self.scam.scaleCam(frame)
                 self.scara.set_pH_pW(pH=self.pH, pW=self.pW)
                 print('Scale Camera:', P1, P2, self.pH, self.pW)
+                self.P1 = P1
+                self.P2 = P2
                 if self.scam.scam_completed:
                     dis12 = self.scam.distance(P1[0], P1[1], P2[0], P2[1])
                     self.pp1cm = dis12/12
                     self.scara.set_pp1cm(dis12/12)
 
+
+            # for obj in self.objs:
+            #     if not obj.in_cats:
+            #         cx = int(obj.center[0])
+            #         cy = int(obj.center[1])
+            #         c1 = (cx - 60, cy - 60)
+            #         c2 = (cx + 60, cy + 60)
+            #         cv2.rectangle(frame, c1, c2, (255,255,255), thickness=2, lineType=cv2.LINE_AA)
+            self.uic.lb_not_in_classes.setText(str(self.non_in_cats))
             frame[:, 560:561] = [0, 255, 0]
             frame[:, 639:640] = [0, 255, 0]
-            frame[:, 80] = [0, 255, 0]
+            frame[:, 100] = [0, 255, 0]
             self.result = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             showImage = QtGui.QImage(self.result.data, self.result.shape[1], self.result.shape[0],
                                      QtGui.QImage.Format_RGB888)
@@ -785,6 +815,14 @@ class MainWindow(QMainWindow):
         STOP = [0x02, 0x31, 0x03]   # 0x02 '1' 0x03
         self.ser[0].sendSerial(bytes(STOP))
         self.scara.is_running = False
+    def btnReady_robot_clicked(self):
+        neg = 0x2D
+        pos = 0x2B
+
+        READY = [0x02, 0x37, 0x30, pos, 0x30, 0x30, 0x30, 0x30,
+                 pos, 0x31, 0x30, 0x30, 0x30, 0x31, 0x30, 0x31, 0x30, 0x03]
+
+        self.ser[0].sendSerial(bytes(READY))
 
     #   Check and pick object
     obj_picking = None
@@ -815,7 +853,7 @@ class MainWindow(QMainWindow):
 
     def addTo_lswStack(self, obj):
         item = QtWidgets.QListWidgetItem()
-        item.setText('ID:' + str(obj.id) + '        ' + str(self.dictCls[obj.cls]))
+        item.setText('ID: ' + str(obj.id) + '        ' + str(self.dictCls[obj.cls]))
         item.setIcon(self.clsIcon[obj.cls])
         self.uic.lsw_stack_obj.addItem(item)
 
