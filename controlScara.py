@@ -17,7 +17,7 @@ class Scara(QThread):
     is_running = False
     is_busy = False
 
-    dx_con = -285  # 290 mm # hoat dong on voi -300 mm
+    dx_con = -285  # -290 mm # -300 mm
     dy_con = 210  # 205 mm
     pp1cm = None
     pH = None
@@ -167,7 +167,7 @@ class Scara(QThread):
         # tf2 = max(abs(s1 / vmax1) + vmax1 / amax, abs(s4 / vmax4) + vmax4 / amax)
         return tf1
 
-    def pick_object(self, obj, ser):
+    def pick_object(self, obj):
         id = obj.id
         cls = obj.cls
         center = obj.center   # pixel
